@@ -1,0 +1,11 @@
+name = "camperlog"
+main = "src/index.js"
+compatibility_date = "2026-08-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "camperlog-db"
+database_id = "23a199d0-d245-4c10-87a1-7ae56ceeaba3"
+
+[vars]
+APP_PASSWORD = "iva2026"
