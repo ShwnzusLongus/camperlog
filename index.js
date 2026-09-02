@@ -393,6 +393,7 @@ const HTML = `<!DOCTYPE html>
   }
   .choice-btn.sel { background: var(--sky); border-color: var(--sky); color: var(--paper); }
   .weather-btn { flex-direction: column; display: flex; align-items: center; gap: 4px; flex: none; width: 68px; }
+  .signal-btn { flex: 1 1 auto; min-width: 70px; padding: 9px 8px; font-size: 12px; }
   .star-picker { display: flex; gap: 4px; }
   .star-picker button { background: none; border: none; font-size: 26px; cursor: pointer; color: var(--sky-soft); }
   .star-picker button.on { color: var(--accent); }
