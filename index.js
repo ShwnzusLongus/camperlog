@@ -22,9 +22,30 @@ function uid() {
   return crypto.randomUUID();
 }
 
+// Legt eine Spalte automatisch an, falls sie noch fehlt (z. B. nach einem
+// Feature-Update, bei dem die manuelle Datenbank-Migration noch aussteht).
+// Existiert die Spalte schon, schlägt ALTER TABLE erwartungsgemäß fehl –
+// das wird hier bewusst ignoriert.
+async function ensureSpalte(env, tabelle, spalte, typ) {
+  try {
+    await env.DB.prepare(`ALTER TABLE ${tabelle} ADD COLUMN ${spalte} ${typ}`).run();
+  } catch (e) {
+    // Spalte existiert vermutlich bereits – kein Problem.
+  }
+}
+
 async function handleApi(request, env, url) {
   const { pathname } = url;
   const method = request.method;
+
+  // Selbstreparatur: neue Spalten aus Updates automatisch nachziehen,
+  // damit keine manuelle SQL-Konsole nötig ist.
+  if (
+    (pathname === "/api/touren" && (method === "POST" || method === "PATCH")) ||
+    /^\/api\/touren\/[^/]+$/.test(pathname)
+  ) {
+    await ensureSpalte(env, "touren", "strom_kosten", "TEXT");
+  }
 
   // --- Touren ---
   if (pathname === "/api/touren" && method === "GET") {
@@ -41,8 +62,8 @@ async function handleApi(request, env, url) {
     }
     const id = uid();
     await env.DB.prepare(
-      `INSERT INTO touren (id, ort, typ, datum_von, datum_bis, kosten, wetter, bewertung, notizen, favorit, strom, boden, sanitaer, bezahlung, broetchenservice, umgebung, nachttemperatur, tagestemperatur, anreise_zeit, abreise_zeit, zeiten_24h, mobilfunk, wlan)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO touren (id, ort, typ, datum_von, datum_bis, kosten, wetter, bewertung, notizen, favorit, strom, boden, sanitaer, bezahlung, broetchenservice, umgebung, nachttemperatur, tagestemperatur, anreise_zeit, abreise_zeit, zeiten_24h, mobilfunk, wlan, strom_kosten)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
       .bind(
         id,
@@ -66,7 +87,8 @@ async function handleApi(request, env, url) {
         body.abreiseZeit || null,
         body.zeiten24h ? 1 : 0,
         body.mobilfunk || null,
-        body.wlan || null
+        body.wlan || null,
+        body.stromKosten || null
       )
       .run();
     return json({ id }, 201);
@@ -80,7 +102,7 @@ async function handleApi(request, env, url) {
       return json({ error: "Ort und Datum sind erforderlich." }, 400);
     }
     await env.DB.prepare(
-      `UPDATE touren SET ort = ?, typ = ?, datum_von = ?, datum_bis = ?, kosten = ?, wetter = ?, bewertung = ?, notizen = ?, strom = ?, boden = ?, sanitaer = ?, bezahlung = ?, broetchenservice = ?, umgebung = ?, nachttemperatur = ?, tagestemperatur = ?, anreise_zeit = ?, abreise_zeit = ?, zeiten_24h = ?, mobilfunk = ?, wlan = ?
+      `UPDATE touren SET ort = ?, typ = ?, datum_von = ?, datum_bis = ?, kosten = ?, wetter = ?, bewertung = ?, notizen = ?, strom = ?, boden = ?, sanitaer = ?, bezahlung = ?, broetchenservice = ?, umgebung = ?, nachttemperatur = ?, tagestemperatur = ?, anreise_zeit = ?, abreise_zeit = ?, zeiten_24h = ?, mobilfunk = ?, wlan = ?, strom_kosten = ?
        WHERE id = ?`
     )
       .bind(
@@ -105,6 +127,7 @@ async function handleApi(request, env, url) {
         body.zeiten24h ? 1 : 0,
         body.mobilfunk || null,
         body.wlan || null,
+        body.stromKosten || null,
         id
       )
       .run();
@@ -155,28 +178,137 @@ async function handleApi(request, env, url) {
   if (pathname === "/api/suche" && method === "GET") {
     const q = url.searchParams.get("q");
     if (!q || !q.trim()) return json({ error: "Suchbegriff fehlt." }, 400);
+
+    async function fetchMitTimeout(url, options, ms) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), ms);
+      try {
+        return await fetch(url, { ...options, signal: controller.signal });
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
     try {
-      const geoRes = await fetch(
-        `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=1`,
-        { headers: { "User-Agent": "CamperLog/1.0 (privates Reisetagebuch)" } }
-      );
-      const geo = await geoRes.json();
+      async function nominatimSuche(query) {
+        const res = await fetchMitTimeout(
+          `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=20&extratags=1&namedetails=1`,
+          { headers: { "User-Agent": "CamperLog/1.0 (privates Reisetagebuch)" } },
+          8000
+        );
+        if (!res.ok) return { fehler: "überlastet" };
+        const data = await res.json().catch(() => null);
+        if (!data) return { fehler: "antwort" };
+        return { daten: data };
+      }
+
+      // 1) Direkte Namenssuche: passt einer der Treffer selbst zu einem
+      //    Camping- oder Stellplatz, brauchen wir keine Stadt/Region dazu.
+      let erg;
+      try {
+        erg = await nominatimSuche(q);
+      } catch (e) {
+        return json({ results: [], message: "Die Ortssuche antwortet gerade nicht. Bitte gleich nochmal versuchen." });
+      }
+      if (erg.fehler === "überlastet") {
+        return json({ results: [], message: "Die Ortssuche ist gerade überlastet. Bitte gleich nochmal versuchen." });
+      }
+      if (erg.fehler === "antwort") {
+        return json({ results: [], message: "Die Ortssuche hat eine unerwartete Antwort geliefert. Bitte nochmal versuchen." });
+      }
+      let geoAlle = erg.daten;
+
+      const PLATZ_TYPEN_OSM = ["camp_site", "caravan_site"];
+      const treffersuche = (liste) => (liste || []).filter((r) => r.class === "tourism" && PLATZ_TYPEN_OSM.includes(r.type));
+      let namensTreffer = treffersuche(geoAlle);
+
+      // 1b) Nichts gefunden? Der Suchbegriff enthält evtl. einen Zusatz wie
+      //     "Womo Park" vor dem eigentlichen Ortsnamen. Wir probieren
+      //     automatisch kürzere Varianten (die letzten 1-2 Wörter), bevor
+      //     wir aufgeben.
+      const woerter = q.trim().split(/\s+/);
+      if ((!geoAlle || geoAlle.length === 0) && woerter.length > 1) {
+        for (const anzahl of [2, 1]) {
+          if (woerter.length <= anzahl) continue;
+          const kurzerBegriff = woerter.slice(-anzahl).join(" ");
+          try {
+            const zweiterVersuch = await nominatimSuche(kurzerBegriff);
+            if (zweiterVersuch.daten && zweiterVersuch.daten.length > 0) {
+              geoAlle = zweiterVersuch.daten;
+              namensTreffer = treffersuche(geoAlle);
+              break;
+            }
+          } catch (e) {
+            // nächste kürzere Variante probieren
+          }
+        }
+      }
+
+      if (namensTreffer.length > 0) {
+        const results = namensTreffer
+          .map((r) => ({
+            name: (r.namedetails && r.namedetails.name) || (r.display_name || "").split(",")[0],
+            typ: r.type === "caravan_site" ? "Stellplatz" : "Campingplatz",
+            lat: parseFloat(r.lat),
+            lon: parseFloat(r.lon),
+            distanzKm: null,
+            adresse: (r.display_name || "").split(",").slice(1, 3).join(",").trim(),
+            website: (r.extratags && (r.extratags.website || r.extratags["contact:website"])) || null,
+            telefon: (r.extratags && (r.extratags.phone || r.extratags["contact:phone"])) || null,
+          }))
+          .slice(0, 20);
+        return json({ results, modus: "name" });
+      }
+
+      // 2) Kein direkter Namenstreffer: q (bzw. die kürzere Variante) als
+      //    Ort/Region behandeln und im Umkreis nach Camping-/Stellplätzen
+      //    suchen (bisheriges Verhalten).
+      const geo = geoAlle;
       if (!geo || !geo.length) {
-        return json({ results: [], message: "Ort nicht gefunden. Versuch's mit einer Stadt oder Region." });
+        return json({
+          results: [],
+          message:
+            "Nichts gefunden. Versuch's mit dem genauen Platznamen oder einer Stadt in der Nähe – nicht jeder private Stellplatz ist bei OpenStreetMap verzeichnet.",
+        });
       }
       const lat = parseFloat(geo[0].lat);
       const lon = parseFloat(geo[0].lon);
       const radius = 20000; // 20 km
       const overpassQuery = `[out:json][timeout:25];(node["tourism"~"^(camp_site|caravan_site)$"](around:${radius},${lat},${lon});way["tourism"~"^(camp_site|caravan_site)$"](around:${radius},${lat},${lon}););out center 25;`;
-      const opRes = await fetch("https://overpass-api.de/api/interpreter", {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded", "User-Agent": "CamperLog/1.0" },
-        body: "data=" + encodeURIComponent(overpassQuery),
-      });
-      if (!opRes.ok) {
-        return json({ results: [], message: "Die Kartensuche ist gerade überlastet. Bitte gleich nochmal versuchen." });
+
+      // Mehrere Overpass-Server probieren, falls der erste überlastet ist
+      const overpassServer = [
+        "https://overpass-api.de/api/interpreter",
+        "https://overpass.kumi.systems/api/interpreter",
+        "https://overpass.openstreetmap.ru/api/interpreter",
+      ];
+      let opRes = null;
+      for (const server of overpassServer) {
+        try {
+          const res = await fetchMitTimeout(
+            server,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/x-www-form-urlencoded", "User-Agent": "CamperLog/1.0" },
+              body: "data=" + encodeURIComponent(overpassQuery),
+            },
+            12000
+          );
+          if (res.ok) {
+            opRes = res;
+            break;
+          }
+        } catch (e) {
+          // nächsten Server probieren
+        }
       }
-      const opData = await opRes.json();
+      if (!opRes) {
+        return json({ results: [], message: "Die Kartensuche ist gerade überlastet. Bitte in ein paar Minuten nochmal versuchen." });
+      }
+      const opData = await opRes.json().catch(() => null);
+      if (!opData) {
+        return json({ results: [], message: "Die Kartensuche hat eine unerwartete Antwort geliefert. Bitte nochmal versuchen." });
+      }
       const results = (opData.elements || [])
         .map((el) => {
           const elLat = el.lat || (el.center && el.center.lat);
@@ -295,7 +427,7 @@ const HTML = `<!DOCTYPE html>
     border: 3px solid var(--accent); color: var(--accent);
     display: flex; align-items: center; justify-content: center;
     text-align: center; transform: rotate(-4deg);
-    font-family: 'Courier New', monospace; font-size: 9px; font-weight: 700;
+    font-family: 'Courier New', monospace; font-size: 10px; font-weight: 700;
     text-transform: uppercase; line-height: 1.15;
     animation: stampIn .5s cubic-bezier(.2,1.4,.4,1) both;
     background: var(--card);
@@ -305,28 +437,28 @@ const HTML = `<!DOCTYPE html>
   .stats > div { text-align: center; padding: 0 4px; border-left: 1px solid var(--sky-soft); }
   .stats > div:first-child { border-left: none; }
   .stat-val { font-size: 28px; font-weight: 700; color: var(--accent); display: block; }
-  .stat-label { font-family: 'Courier New', monospace; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); }
+  .stat-label { font-family: 'Courier New', monospace; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
   .temp-row {
     display: flex; justify-content: center; gap: 20px; margin-top: 16px; padding-top: 14px;
     border-top: 1px solid var(--sky-soft); font-family: 'Courier New', monospace;
-    font-size: 12px; color: var(--ink); font-weight: 700;
+    font-size: 14px; color: var(--ink); font-weight: 700;
   }
   @media (max-width: 380px) {
     .stat-val { font-size: 22px; }
-    .stamp { width: 54px; height: 54px; font-size: 8px; right: 12px; }
+    .stamp { width: 58px; height: 58px; font-size: 9px; right: 12px; }
     .stampcard { padding-top: 46px; }
-    .temp-row { gap: 12px; font-size: 11px; }
+    .temp-row { gap: 12px; font-size: 13px; }
   }
 
   .section-head { display: flex; align-items: center; justify-content: space-between; margin: 8px 0 14px; }
   .section-head h2 { font-size: 20px; color: var(--sky); margin: 0; }
-  .count { font-family: 'Courier New', monospace; font-size: 12px; font-weight: 600; color: var(--muted); }
+  .count { font-family: 'Courier New', monospace; font-size: 13px; font-weight: 700; color: var(--muted); }
 
   .tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
   .tab-btn {
     flex: 1 1 calc(50% - 4px); min-width: 90px; padding: 10px 6px; border-radius: 10px; border: 2px solid var(--sky-soft);
     background: var(--card); color: var(--sky); font-family: 'Courier New', monospace; font-weight: 700;
-    font-size: 12px; text-transform: uppercase; letter-spacing: .04em; cursor: pointer;
+    font-size: 13px; text-transform: uppercase; letter-spacing: .02em; cursor: pointer;
   }
   .tab-btn.active { background: var(--sky); border-color: var(--sky); color: var(--paper); }
 
@@ -335,7 +467,7 @@ const HTML = `<!DOCTYPE html>
     text-align: center; color: var(--ink); font-size: 15px;
   }
   .year-head {
-    font-family: 'Courier New', monospace; font-weight: 700; font-size: 13px;
+    font-family: 'Courier New', monospace; font-weight: 700; font-size: 15px;
     text-transform: uppercase; letter-spacing: .15em; color: var(--sky);
     margin: 22px 0 10px; padding-bottom: 6px; border-bottom: 2px solid var(--sky-soft);
   }
@@ -344,12 +476,12 @@ const HTML = `<!DOCTYPE html>
   .filter-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
   .filter-select {
     background: var(--card); border: 2px solid var(--sky-soft); border-radius: 8px;
-    padding: 8px 10px; font-size: 13px; font-weight: 600; color: var(--sky); font-family: 'Courier New', monospace;
+    padding: 9px 10px; font-size: 14px; font-weight: 700; color: var(--sky); font-family: 'Courier New', monospace;
     flex: 1; min-width: 130px;
   }
   .filter-toggle {
     background: var(--card); border: 2px solid var(--sky-soft); border-radius: 8px;
-    padding: 8px 12px; font-size: 13px; font-weight: 700; color: var(--sky); font-family: 'Courier New', monospace;
+    padding: 9px 12px; font-size: 14px; font-weight: 700; color: var(--sky); font-family: 'Courier New', monospace;
     cursor: pointer; white-space: nowrap;
   }
   .filter-toggle.active { background: var(--accent); border-color: var(--accent); color: var(--card); }
@@ -371,14 +503,14 @@ const HTML = `<!DOCTYPE html>
   }
   .card-body { flex: 1; min-width: 0; }
   .card-title { font-weight: 700; color: var(--sky); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .card-meta { font-family: 'Courier New', monospace; font-size: 12px; font-weight: 600; color: var(--muted); margin-top: 3px; display: flex; gap: 6px; flex-wrap: wrap; }
+  .card-meta { font-family: 'Courier New', monospace; font-size: 13px; font-weight: 700; color: var(--muted); margin-top: 4px; display: flex; gap: 6px; flex-wrap: wrap; }
   .fav-star { font-size: 18px; cursor: pointer; flex-shrink: 0; background: none; border: none; padding: 4px; line-height: 1; }
-  .stars { color: var(--accent); font-size: 12px; letter-spacing: 1px; flex-shrink: 0; }
+  .stars { color: var(--accent); font-size: 14px; letter-spacing: 1px; flex-shrink: 0; }
 
   /* FAB entfernt zugunsten des Hinzufügen-Buttons oben im Hero */
 
   label.field { display: block; margin-bottom: 16px; }
-  .field-label { font-family: 'Courier New', monospace; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); display: block; margin-bottom: 6px; }
+  .field-label { font-family: 'Courier New', monospace; font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); display: block; margin-bottom: 7px; }
   input, textarea, select {
     width: 100%; background: var(--card); border: 2px solid var(--sky-soft); border-radius: 8px;
     padding: 10px 12px; font-size: 15px; color: var(--ink); font-family: inherit;
@@ -389,11 +521,11 @@ const HTML = `<!DOCTYPE html>
   .choice-row { display: flex; gap: 8px; flex-wrap: wrap; }
   .choice-btn {
     flex: 1; min-width: 80px; padding: 10px; border-radius: 8px; border: 2px solid var(--sky-soft);
-    background: var(--card); color: var(--sky); font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit;
+    background: var(--card); color: var(--sky); font-size: 14px; font-weight: 700; cursor: pointer; font-family: inherit;
   }
   .choice-btn.sel { background: var(--sky); border-color: var(--sky); color: var(--paper); }
-  .weather-btn { flex-direction: column; display: flex; align-items: center; gap: 4px; flex: none; width: 68px; }
-  .signal-btn { flex: 1 1 auto; min-width: 70px; padding: 9px 8px; font-size: 12px; }
+  .weather-btn { flex-direction: column; display: flex; align-items: center; gap: 4px; flex: none; width: 78px; }
+  .signal-btn { flex: 1 1 auto; min-width: 74px; padding: 10px 8px; font-size: 13px; }
   .star-picker { display: flex; gap: 4px; }
   .star-picker button { background: none; border: none; font-size: 26px; cursor: pointer; color: var(--sky-soft); }
   .star-picker button.on { color: var(--accent); }
@@ -434,9 +566,9 @@ const HTML = `<!DOCTYPE html>
   .detail-box { background: var(--card); border: 2px solid var(--sky-soft); border-radius: 14px; padding: 20px; }
   .detail-row { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
   .detail-row:last-child { margin-bottom: 0; }
-  .detail-label { font-family: 'Courier New', monospace; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); width: 96px; flex-shrink: 0; }
+  .detail-label { font-family: 'Courier New', monospace; font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); width: 104px; flex-shrink: 0; }
   .confirm-box { border: 2px solid var(--danger); background: #f6e8e0; border-radius: 10px; padding: 14px; margin-bottom: 18px; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-  .confirm-box button { border-radius: 6px; padding: 7px 12px; font-size: 13px; cursor: pointer; border: 1px solid var(--danger); font-family: inherit; }
+  .confirm-box button { border-radius: 6px; padding: 8px 13px; font-size: 14px; font-weight: 700; cursor: pointer; border: 1px solid var(--danger); font-family: inherit; }
   .confirm-box .yes { background: var(--danger); color: white; border: none; }
   .confirm-box .no { background: transparent; color: var(--danger); }
 
@@ -458,7 +590,7 @@ const HTML = `<!DOCTYPE html>
   }
   .result-body { flex: 1; min-width: 0; }
   .result-title { font-weight: 700; color: var(--sky); }
-  .result-meta { font-family: 'Courier New', monospace; font-size: 12px; font-weight: 600; color: var(--muted); margin-top: 3px; }
+  .result-meta { font-family: 'Courier New', monospace; font-size: 13px; font-weight: 700; color: var(--muted); margin-top: 4px; }
   .add-todrive-btn {
     background: var(--accent); color: var(--card); border: none; border-radius: 999px;
     width: 34px; height: 34px; font-size: 18px; cursor: pointer; flex-shrink: 0; line-height: 1;
@@ -474,23 +606,23 @@ const HTML = `<!DOCTYPE html>
   }
   .badge-icon { font-size: 32px; flex-shrink: 0; }
   .badge-title { font-weight: 700; color: var(--sky); font-size: 15px; }
-  .badge-sub { font-family: 'Courier New', monospace; font-size: 12px; font-weight: 600; color: var(--muted); margin-top: 2px; }
+  .badge-sub { font-family: 'Courier New', monospace; font-size: 13px; font-weight: 700; color: var(--muted); margin-top: 3px; }
 
   .chart-card { background: var(--card); border: 2px solid var(--sky-soft); border-radius: 14px; padding: 18px; margin-bottom: 18px; }
   .chart-bar-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
   .chart-bar-row:last-child { margin-bottom: 0; }
-  .chart-bar-label { font-family: 'Courier New', monospace; font-size: 12px; font-weight: 700; color: var(--muted); width: 40px; flex-shrink: 0; }
+  .chart-bar-label { font-family: 'Courier New', monospace; font-size: 13px; font-weight: 700; color: var(--muted); width: 44px; flex-shrink: 0; }
   .chart-bar-track { flex: 1; height: 14px; background: var(--sky-soft); border-radius: 999px; overflow: hidden; }
   .chart-bar-fill { height: 100%; background: var(--accent); border-radius: 999px; transition: width .4s ease; }
-  .chart-bar-value { font-family: 'Courier New', monospace; font-size: 12px; color: var(--sky); font-weight: 700; width: 56px; text-align: right; flex-shrink: 0; }
+  .chart-bar-value { font-family: 'Courier New', monospace; font-size: 13px; color: var(--sky); font-weight: 700; width: 60px; text-align: right; flex-shrink: 0; }
 
   .year-card { background: var(--card); border: 2px solid var(--sky-soft); border-radius: 14px; padding: 18px; margin-bottom: 14px; }
   .year-card-head { font-family: 'Courier New', monospace; font-weight: 700; font-size: 14px; color: var(--sky); text-transform: uppercase; letter-spacing: .1em; margin-bottom: 12px; }
   .year-card-grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 6px; }
   .year-card-grid > div { text-align: center; }
   .ycg-val { display: block; font-weight: 700; font-size: 18px; color: var(--accent); }
-  .ycg-label { font-family: 'Courier New', monospace; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
-  .year-card-fav { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--sky-soft); font-size: 13px; color: var(--ink); }
+  .ycg-label { font-family: 'Courier New', monospace; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); }
+  .year-card-fav { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--sky-soft); font-size: 14px; font-weight: 600; color: var(--ink); }
 </style>
 </head>
 <body>
@@ -509,6 +641,7 @@ const BODEN_TYPEN = ['Schotter', 'Rasen', 'Sand', 'Asphalt', 'Wiese', 'Sonstiges
 const BEZAHLUNG_TYPEN = ['Bar', 'Karte', 'Online'];
 const UMGEBUNG_TYPEN = ['Natur', 'Stadt', 'Beides'];
 const SIGNAL_STUFEN = ['Kein Empfang', 'Schwach', 'Mittel', 'Gut', 'Stark'];
+const STROM_KOSTEN_TYPEN = ['Inbegriffen', 'Kostenpflichtig'];
 
 const ICON_BACK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>';
 const ICON_TRASH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>';
@@ -623,6 +756,7 @@ async function suchePlaetze(q) {
 async function zuToDriveHinzufuegen(result) {
   const notizTeile = [result.typ];
   if (result.distanzKm != null) notizTeile.push(result.distanzKm + ' km entfernt');
+  else if (result.adresse) notizTeile.push(result.adresse);
   if (result.website) notizTeile.push(result.website);
   await api('/api/favoriten', {
     method: 'POST',
@@ -672,7 +806,7 @@ function renderHome() {
       <div class="hero-top">
         <div>
           <div class="eyebrow"><img src="/icon-192.jpg" class="logo-badge" alt="CamperLog Logo" /> Unser Tourenbuch</div>
-          <h1>Unterwegs im<br/>Wohnmobil</h1>
+          <h1>Unterwegs<br/>mit Iva</h1>
         </div>
         <button class="add-btn-top" id="add-top-btn"><span class="add-btn-plus">+</span><span>Neue Tour</span></button>
       </div>
@@ -955,7 +1089,7 @@ function renderSucheTab() {
   box.innerHTML = \`
     <div class="section-head"><h2>Plätze finden</h2></div>
     <div class="search-row">
-      <input type="text" id="suche-input" placeholder="Ort, Region oder Land eingeben …" value="\${escapeHtml(state.sucheQuery)}" />
+      <input type="text" id="suche-input" placeholder="Platzname, Ort oder Region eingeben …" value="\${escapeHtml(state.sucheQuery)}" />
       <button class="search-btn" id="suche-btn">\${state.sucheLoading ? '…' : 'Suchen'}</button>
     </div>
     <div id="suche-ergebnisse"></div>
@@ -987,7 +1121,7 @@ function renderSucheTab() {
   input.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); runSearch(); } };
 
   if (state.sucheResults === null) {
-    ergebnisse.appendChild(el('<div class="empty">Gib einen Ort ein – z. B. eine Stadt, Region oder Küste – und finde echte Camping- und Stellplätze in der Umgebung (Daten von OpenStreetMap).</div>'));
+    ergebnisse.appendChild(el('<div class="empty">Gib den Namen eines Camping- oder Stellplatzes ein (z. B. "Wohnmobilstellplatz Steinhude") oder einen Ort/eine Region, um Plätze in der Umgebung zu finden (Daten von OpenStreetMap).</div>'));
     return box;
   }
   if (state.sucheMessage && state.sucheResults.length === 0) {
@@ -996,12 +1130,16 @@ function renderSucheTab() {
   }
   state.sucheResults.forEach((r, i) => {
     const already = state.favoriten.some(f => f.ort === r.name) || state.sucheAddedIds[i];
+    const metaTeile = [escapeHtml(r.typ)];
+    if (r.distanzKm != null) metaTeile.push(r.distanzKm + ' km entfernt');
+    else if (r.adresse) metaTeile.push(escapeHtml(r.adresse));
+    if (r.website) metaTeile.push('Website vorhanden');
     const card = el(\`
       <div class="result-card">
         <div class="icon-circle pin-icon" title="Auf Google Maps öffnen">\${ICON_PIN}</div>
         <div class="result-body" title="Auf Google Maps öffnen">
           <div class="result-title">\${escapeHtml(r.name)}</div>
-          <div class="result-meta">\${escapeHtml(r.typ)} · \${r.distanzKm} km entfernt\${r.website ? ' · Website vorhanden' : ''}</div>
+          <div class="result-meta">\${metaTeile.join(' · ')}</div>
         </div>
         <button class="add-todrive-btn" \${already ? 'disabled' : ''} title="Zur ToDrive-Liste hinzufügen">\${already ? '✓' : '+'}</button>
       </div>
@@ -1044,12 +1182,13 @@ function renderForm(editTour) {
     zeiten24h: !!editTour.zeiten_24h,
     mobilfunk: editTour.mobilfunk || '',
     wlan: editTour.wlan || '',
+    stromKosten: editTour.strom_kosten || '',
   } : {
     ort: '', typ: 'Stellplatz', datumVon: '', datumBis: '',
     kosten: '', wetter: ['sonnig'], bewertung: 4, notizen: '',
     strom: false, boden: [], sanitaer: false, bezahlung: [], broetchenservice: false, umgebung: '',
     nachttemperatur: '', tagestemperatur: '', anreiseZeit: '', abreiseZeit: '', zeiten24h: false,
-    mobilfunk: '', wlan: '',
+    mobilfunk: '', wlan: '', stromKosten: '',
   };
   const [anreiseH, anreiseM] = (form.anreiseZeit || '').split(':');
   const [abreiseH, abreiseM] = (form.abreiseZeit || '').split(':');
@@ -1095,7 +1234,10 @@ function renderForm(editTour) {
         <div class="choice-row" id="ausstattung-row">
           <button type="button" class="choice-btn \${form.strom ? 'sel' : ''}" data-flag="strom">⚡ Strom</button>
           <button type="button" class="choice-btn \${form.sanitaer ? 'sel' : ''}" data-flag="sanitaer">🚿 Sanitär</button>
-          <button type="button" class="choice-btn \${form.broetchenservice ? 'sel' : ''}" data-flag="broetchenservice">🥐 Brötchenservice</button>
+          <button type="button" class="choice-btn \${form.broetchenservice ? 'sel' : ''}" data-flag="broetchenservice">🥐 Brötchen</button>
+        </div>
+        <div class="choice-row" id="strom-kosten-row" style="\${form.strom ? '' : 'display:none;'} margin-top:8px;">
+          \${STROM_KOSTEN_TYPEN.map(s => \`<button type="button" class="choice-btn \${s === form.stromKosten ? 'sel' : ''}" data-stromkosten="\${s}">\${s}</button>\`).join('')}
         </div>
       </label>
       <label class="field"><span class="field-label">Bezahlen (mehrfach möglich)</span>
@@ -1121,7 +1263,7 @@ function renderForm(editTour) {
       <label class="field"><span class="field-label">Kosten (€)</span><input type="number" step="0.01" min="0" name="kosten" placeholder="0,00" value="\${form.kosten}" /></label>
       <label class="field"><span class="field-label">Wetter (mehrfach möglich)</span>
         <div class="choice-row" id="wetter-row">
-          \${WEATHER.map(w => \`<button type="button" class="choice-btn weather-btn \${form.wetter.includes(w.key) ? 'sel' : ''}" data-wetter="\${w.key}"><span style="font-size:18px">\${w.emoji}</span><span class="mono" style="font-size:10px">\${w.label}</span></button>\`).join('')}
+          \${WEATHER.map(w => \`<button type="button" class="choice-btn weather-btn \${form.wetter.includes(w.key) ? 'sel' : ''}" data-wetter="\${w.key}"><span style="font-size:20px">\${w.emoji}</span><span class="mono" style="font-size:12px;font-weight:700">\${w.label}</span></button>\`).join('')}
         </div>
       </label>
       <div class="row2">
@@ -1192,6 +1334,19 @@ function renderForm(editTour) {
       const flag = btn.dataset.flag;
       form[flag] = !form[flag];
       btn.classList.toggle('sel', form[flag]);
+      if (flag === 'strom') {
+        wrap.querySelector('#strom-kosten-row').style.display = form.strom ? '' : 'none';
+        if (!form.strom) {
+          form.stromKosten = '';
+          wrap.querySelectorAll('#strom-kosten-row .choice-btn').forEach(b => b.classList.remove('sel'));
+        }
+      }
+    };
+  });
+  wrap.querySelectorAll('#strom-kosten-row .choice-btn').forEach(btn => {
+    btn.onclick = () => {
+      form.stromKosten = form.stromKosten === btn.dataset.stromkosten ? '' : btn.dataset.stromkosten;
+      wrap.querySelectorAll('#strom-kosten-row .choice-btn').forEach(b => b.classList.toggle('sel', b.dataset.stromkosten === form.stromKosten));
     };
   });
   wrap.querySelector('#zeiten-24h-btn').onclick = (btnEvent) => {
@@ -1239,6 +1394,7 @@ function renderForm(editTour) {
       zeiten24h: form.zeiten24h,
       mobilfunk: form.mobilfunk || null,
       wlan: form.wlan || null,
+      stromKosten: form.strom ? (form.stromKosten || null) : null,
     };
     const errBox = wrap.querySelector('#form-err');
     if (!payload.ort || !payload.ort.trim() || !payload.datumVon) {
@@ -1287,7 +1443,7 @@ function renderDetail() {
       <span class="pin-icon" style="margin-top:2px;">\${ICON_PIN}</span>
       <h1 style="font-size:28px; margin:0;">\${escapeHtml(t.ort)}</h1>
     </div>
-    <div class="mono" style="margin-left:32px; color: var(--muted); font-size:13px; margin-bottom:22px;">\${escapeHtml(t.typ)} \${t.favorit ? ' · ★ Favorit' : ''}</div>
+    <div class="mono" style="margin-left:32px; color: var(--muted); font-size:14px; font-weight:700; margin-bottom:22px;">\${escapeHtml(t.typ)} \${t.favorit ? ' · ★ Favorit' : ''}</div>
     <div class="detail-box">
       <div class="detail-row"><span class="detail-label">Datum</span><span>\${fmtDate(t.datum_von)}\${t.datum_bis && t.datum_bis !== t.datum_von ? ' – ' + fmtDate(t.datum_bis) : ''}</span></div>
       \${t.zeiten_24h ? \`<div class="detail-row"><span class="detail-label">Zeiten</span><span>🕐 Rund um die Uhr</span></div>\` : (t.anreise_zeit || t.abreise_zeit) ? \`<div class="detail-row"><span class="detail-label">Zeiten</span><span>\${t.anreise_zeit ? 'An ' + t.anreise_zeit + ' Uhr' : ''}\${t.anreise_zeit && t.abreise_zeit ? ' · ' : ''}\${t.abreise_zeit ? 'Ab ' + t.abreise_zeit + ' Uhr' : ''}</span></div>\` : ''}
@@ -1301,7 +1457,7 @@ function renderDetail() {
       \${t.tagestemperatur != null ? \`<div class="detail-row"><span class="detail-label">Tagestemp.</span><span>☀️ \${t.tagestemperatur}°C</span></div>\` : ''}
       \${t.nachttemperatur != null ? \`<div class="detail-row"><span class="detail-label">Nachttemp.</span><span>🌙 \${t.nachttemperatur}°C</span></div>\` : ''}
       <div class="detail-row"><span class="detail-label">Bewertung</span><span style="color:var(--accent)">\${starsStr(t.bewertung || 0)}</span></div>
-      \${(t.strom || t.sanitaer || t.broetchenservice) ? \`<div class="detail-row"><span class="detail-label">Ausstattung</span><span>\${[t.strom ? '⚡ Strom' : '', t.sanitaer ? '🚿 Sanitär' : '', t.broetchenservice ? '🥐 Brötchenservice' : ''].filter(Boolean).join(' · ')}</span></div>\` : ''}
+      \${(t.strom || t.sanitaer || t.broetchenservice) ? \`<div class="detail-row"><span class="detail-label">Ausstattung</span><span>\${[t.strom ? '⚡ Strom' + (t.strom_kosten ? ' (' + t.strom_kosten + ')' : '') : '', t.sanitaer ? '🚿 Sanitär' : '', t.broetchenservice ? '🥐 Brötchen' : ''].filter(Boolean).join(' · ')}</span></div>\` : ''}
     </div>
     \${t.notizen ? \`<div style="margin-top:20px;"><div class="field-label">Notizen</div><p style="white-space:pre-wrap; line-height:1.6;">\${escapeHtml(t.notizen)}</p></div>\` : ''}
     <div style="display:flex; gap:10px; margin-top:24px; flex-wrap:wrap;">
