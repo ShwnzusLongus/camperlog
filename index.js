@@ -22,6 +22,16 @@ function uid() {
   return crypto.randomUUID();
 }
 
+async function fetchMitTimeout(url, options, ms) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // Legt eine Spalte automatisch an, falls sie noch fehlt (z. B. nach einem
 // Feature-Update, bei dem die manuelle Datenbank-Migration noch aussteht).
 // Existiert die Spalte schon, schlägt ALTER TABLE erwartungsgemäß fehl –
@@ -33,6 +43,19 @@ async function ensureSpalte(env, tabelle, spalte, typ) {
     // Spalte existiert vermutlich bereits – kein Problem.
   }
 }
+
+// Foto-Tabellen einmal pro Worker-Instanz anlegen (CREATE ... IF NOT EXISTS
+// ist beliebig oft ausführbar; der Merker spart unnötige Datenbankaufrufe).
+let fotoTabellenBereit = false;
+async function ensureFotoTabellen(env) {
+  if (fotoTabellenBereit) return;
+  await env.DB.batch([
+    env.DB.prepare("CREATE TABLE IF NOT EXISTS fotos (tour_id TEXT PRIMARY KEY, mime TEXT, aktualisiert TEXT)"),
+    env.DB.prepare("CREATE TABLE IF NOT EXISTS foto_teile (tour_id TEXT NOT NULL, teil INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tour_id, teil))"),
+  ]);
+  fotoTabellenBereit = true;
+}
+
 
 async function handleApi(request, env, url) {
   const { pathname } = url;
@@ -49,10 +72,69 @@ async function handleApi(request, env, url) {
 
   // --- Touren ---
   if (pathname === "/api/touren" && method === "GET") {
+    await ensureFotoTabellen(env);
     const { results } = await env.DB.prepare(
-      "SELECT * FROM touren ORDER BY datum_von DESC"
+      "SELECT t.*, f.aktualisiert AS foto_stand FROM touren t LEFT JOIN fotos f ON f.tour_id = t.id ORDER BY t.datum_von DESC"
     ).all();
     return json(results);
+  }
+
+  // --- Titelbild pro Tour ---
+  const fotoMatch = pathname.match(/^\/api\/touren\/([^/]+)\/foto$/);
+  if (fotoMatch) {
+    await ensureFotoTabellen(env);
+    const tourId = fotoMatch[1];
+
+    if (method === "GET") {
+      const { results } = await env.DB.prepare(
+        "SELECT data FROM foto_teile WHERE tour_id = ? ORDER BY teil ASC"
+      ).bind(tourId).all();
+      if (!results || !results.length) return new Response("Kein Foto", { status: 404 });
+      const meta = await env.DB.prepare("SELECT mime FROM fotos WHERE tour_id = ?").bind(tourId).first();
+      const bytes = b64ToBytes(results.map((r) => r.data).join(""));
+      return new Response(bytes, {
+        headers: {
+          "Content-Type": (meta && meta.mime) || "image/jpeg",
+          // Die URL enthält den Änderungsstand (?v=...), daher darf lange gecacht werden
+          "Cache-Control": "private, max-age=31536000, immutable",
+        },
+      });
+    }
+
+    if (method === "PUT") {
+      const tour = await env.DB.prepare("SELECT id FROM touren WHERE id = ?").bind(tourId).first();
+      if (!tour) return json({ error: "Tour nicht gefunden." }, 404);
+      const body = await request.json().catch(() => null);
+      const daten = body && typeof body.data === "string" ? body.data.replace(/^data:[^,]*,/, "") : "";
+      const mime = body && /^image\/(jpeg|png|webp)$/.test(body.mime || "") ? body.mime : "image/jpeg";
+      if (!daten || !/^[A-Za-z0-9+/=]+$/.test(daten)) return json({ error: "Ungültiges Bild." }, 400);
+      if (daten.length > 2500000) return json({ error: "Das Foto ist zu groß." }, 413);
+
+      // In Stücke teilen, damit kein einzelner Datenbank-Befehl zu groß wird
+      const STUECK = 64000;
+      const statements = [
+        env.DB.prepare("DELETE FROM foto_teile WHERE tour_id = ?").bind(tourId),
+      ];
+      for (let i = 0, teil = 0; i < daten.length; i += STUECK, teil++) {
+        statements.push(
+          env.DB.prepare("INSERT INTO foto_teile (tour_id, teil, data) VALUES (?, ?, ?)").bind(tourId, teil, daten.slice(i, i + STUECK))
+        );
+      }
+      const stand = new Date().toISOString();
+      statements.push(
+        env.DB.prepare("INSERT OR REPLACE INTO fotos (tour_id, mime, aktualisiert) VALUES (?, ?, ?)").bind(tourId, mime, stand)
+      );
+      await env.DB.batch(statements);
+      return json({ ok: true, foto_stand: stand });
+    }
+
+    if (method === "DELETE") {
+      await env.DB.batch([
+        env.DB.prepare("DELETE FROM foto_teile WHERE tour_id = ?").bind(tourId),
+        env.DB.prepare("DELETE FROM fotos WHERE tour_id = ?").bind(tourId),
+      ]);
+      return json({ ok: true });
+    }
   }
 
   if (pathname === "/api/touren" && method === "POST") {
@@ -71,7 +153,7 @@ async function handleApi(request, env, url) {
         body.typ || "Stellplatz",
         body.datumVon,
         body.datumBis || null,
-        body.kosten ? parseFloat(body.kosten) : null,
+        body.kosten !== undefined && body.kosten !== null && body.kosten !== "" ? parseFloat(body.kosten) : null,
         body.wetter || "sonnig",
         body.bewertung ? parseInt(body.bewertung) : 4,
         body.notizen || null,
@@ -110,7 +192,7 @@ async function handleApi(request, env, url) {
         body.typ || "Stellplatz",
         body.datumVon,
         body.datumBis || null,
-        body.kosten ? parseFloat(body.kosten) : null,
+        body.kosten !== undefined && body.kosten !== null && body.kosten !== "" ? parseFloat(body.kosten) : null,
         body.wetter || "sonnig",
         body.bewertung ? parseInt(body.bewertung) : 4,
         body.notizen || null,
@@ -134,7 +216,12 @@ async function handleApi(request, env, url) {
     return json({ ok: true });
   }
   if (tourMatch && method === "DELETE") {
-    await env.DB.prepare("DELETE FROM touren WHERE id = ?").bind(tourMatch[1]).run();
+    await ensureFotoTabellen(env);
+    await env.DB.batch([
+      env.DB.prepare("DELETE FROM touren WHERE id = ?").bind(tourMatch[1]),
+      env.DB.prepare("DELETE FROM foto_teile WHERE tour_id = ?").bind(tourMatch[1]),
+      env.DB.prepare("DELETE FROM fotos WHERE tour_id = ?").bind(tourMatch[1]),
+    ]);
     return json({ ok: true });
   }
 
@@ -178,16 +265,6 @@ async function handleApi(request, env, url) {
   if (pathname === "/api/suche" && method === "GET") {
     const q = url.searchParams.get("q");
     if (!q || !q.trim()) return json({ error: "Suchbegriff fehlt." }, 400);
-
-    async function fetchMitTimeout(url, options, ms) {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), ms);
-      try {
-        return await fetch(url, { ...options, signal: controller.signal });
-      } finally {
-        clearTimeout(timer);
-      }
-    }
 
     try {
       async function nominatimSuche(query) {
@@ -598,6 +675,34 @@ const HTML = `<!DOCTYPE html>
   .add-todrive-btn:disabled { opacity: .5; }
   .search-msg { color: var(--ink); font-size: 15px; text-align: center; padding: 18px; }
   .hidden { display: none !important; }
+  .vorlage-hinweis {
+    background: rgba(47,111,158,.1); border: 1px solid var(--sky-soft); border-radius: 10px;
+    padding: 10px 12px; font-size: 14px; color: var(--ink); margin: -6px 0 18px; line-height: 1.45;
+  }
+  .card-thumb {
+    width: 48px; height: 48px; border-radius: 10px; object-fit: cover; flex-shrink: 0;
+    border: 2px solid var(--sky-soft); background: var(--sky-soft);
+  }
+  .detail-foto {
+    width: 100%; max-height: 280px; object-fit: cover; border-radius: 14px;
+    border: 2px solid var(--sky-soft); margin-bottom: 18px; display: block; background: var(--sky-soft);
+  }
+  .foto-feld { display: flex; flex-direction: column; gap: 10px; }
+  .foto-vorschau { width: 100%; max-height: 200px; object-fit: cover; border-radius: 12px; border: 2px solid var(--sky-soft); }
+  .foto-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
+  .foto-waehlen { display: inline-flex; align-items: center; }
+  .foto-status { font-size: 14px; color: var(--muted); font-weight: 600; }
+  .sicherung-card { background: var(--card); border: 2px dashed var(--sky-soft); border-radius: 14px; padding: 18px; margin-top: 22px; }
+  .sicherung-text { font-size: 14px; color: var(--ink); line-height: 1.5; margin: 0 0 14px; }
+  .sicherung-buttons { display: flex; gap: 10px; }
+  .sicherung-buttons .btn-primary { flex: 1; padding: 12px; font-size: 15px; }
+  .toast {
+    position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 20px);
+    background: var(--ink); color: var(--paper); padding: 12px 18px; border-radius: 10px;
+    font-size: 14px; font-weight: 600; max-width: calc(100% - 32px); text-align: center;
+    opacity: 0; pointer-events: none; transition: opacity .25s, transform .25s; z-index: 50;
+  }
+  .toast.show { opacity: 1; transform: translate(-50%, 0); }
 
   .badge-card {
     display: flex; align-items: center; gap: 14px;
@@ -656,6 +761,7 @@ let state = {
   favoriten: [],
   activeId: null,
   editingId: null,
+  vorlageId: null,
   homeTab: 'touren', // touren | favoriten | suche
   saving: false,
   error: '',
@@ -684,6 +790,55 @@ function fmtDate(iso) {
 }
 function starsStr(n) {
   return '★★★★★'.slice(0, n) + '☆☆☆☆☆'.slice(0, 5 - n);
+}
+// Alle bisher verwendeten Platznamen (Touren + ToDrive), häufigste zuerst
+function bekannteOrte() {
+  const zaehler = new Map();
+  [...state.touren.map(t => t.ort), ...state.favoriten.map(f => f.ort)].forEach(o => {
+    if (!o || !o.trim()) return;
+    const key = o.trim().toLowerCase();
+    const e = zaehler.get(key) || { name: o.trim(), n: 0 };
+    e.n++;
+    zaehler.set(key, e);
+  });
+  return [...zaehler.values()].sort((a, b) => b.n - a.n || a.name.localeCompare(b.name, 'de')).map(e => e.name);
+}
+function fotoUrl(t) {
+  return '/api/touren/' + encodeURIComponent(t.id) + '/foto?v=' + encodeURIComponent(t.foto_stand || '');
+}
+function tourIconHtml(t) {
+  if (t.foto_stand) return '<img class="card-thumb" src="' + fotoUrl(t) + '" alt="" loading="lazy" />';
+  return '<div class="icon-circle">' + weatherEmoji((t.wetter || '').split(',')[0]) + '</div>';
+}
+// Foto auf dem Handy verkleinern, bevor es hochgeladen wird (schneller, spart Speicher)
+function bildVerkleinern(datei) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(datei);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const versuch = (maxKante, qualitaet) => {
+        const faktor = Math.min(1, maxKante / Math.max(img.naturalWidth, img.naturalHeight));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(img.naturalWidth * faktor);
+        canvas.height = Math.round(img.naturalHeight * faktor);
+        canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+        return canvas.toDataURL('image/jpeg', qualitaet);
+      };
+      let daten = versuch(1280, 0.72);
+      if (daten.length > 900000) daten = versuch(1000, 0.6);
+      if (daten.length > 900000) daten = versuch(800, 0.5);
+      resolve(daten);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Bild konnte nicht gelesen werden.')); };
+    img.src = url;
+  });
+}
+// Gleicher Platz, nur anders geschrieben (Groß/klein, Leerzeichen)? Dann bekannte Schreibweise nehmen
+function vereinheitlicheOrt(eingabe) {
+  const key = (eingabe || '').trim().replace(/\\s+/g, ' ').toLowerCase();
+  const treffer = state.touren.find(t => (t.ort || '').trim().replace(/\\s+/g, ' ').toLowerCase() === key);
+  return treffer ? treffer.ort : (eingabe || '').trim().replace(/\\s+/g, ' ');
 }
 const STUNDEN = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0'));
 const MINUTEN = ['00', '05', '10', '15', '20', '25', '30', '35', '40', '45', '50', '55'];
@@ -793,7 +948,8 @@ function render() {
   if (state.view === 'home') app.appendChild(renderHome());
   else if (state.view === 'form') {
     const editTour = state.editingId ? state.touren.find(x => x.id === state.editingId) : null;
-    app.appendChild(renderForm(editTour));
+    const vorlage = !editTour && state.vorlageId ? state.touren.find(x => x.id === state.vorlageId) : null;
+    app.appendChild(renderForm(editTour, vorlage));
   }
   else if (state.view === 'detail') app.appendChild(renderDetail());
 }
@@ -835,7 +991,7 @@ function renderHome() {
     <div id="tab-content"></div>
   \`;
   wrap.querySelector('#todrive-home').appendChild(renderToDriveHome());
-  wrap.querySelector('#add-top-btn').onclick = () => { state.editingId = null; state.view = 'form'; state.error = ''; render(); };
+  wrap.querySelector('#add-top-btn').onclick = () => { state.editingId = null; state.vorlageId = null; state.view = 'form'; state.error = ''; render(); };
   wrap.querySelectorAll('.tab-btn').forEach(btn => {
     btn.onclick = () => { state.homeTab = btn.dataset.tab; render(); };
   });
@@ -882,7 +1038,7 @@ function renderToDriveHome() {
 function renderTourCard(t) {
   const card = el(\`
     <div class="card">
-      <div class="icon-circle">\${weatherEmoji(t.wetter)}</div>
+      \${tourIconHtml(t)}
       <div class="card-body">
         <div class="card-title">\${escapeHtml(t.ort)}</div>
         <div class="card-meta"><span>\${fmtDate(t.datum_von)}</span><span>·</span><span>\${escapeHtml(t.typ)}</span>\${t.strom ? '<span>⚡</span>' : ''}\${t.sanitaer ? '<span>🚿</span>' : ''}\${t.broetchenservice ? '<span>🥐</span>' : ''}</div>
@@ -978,7 +1134,7 @@ function renderFavoritenTab() {
   favTouren.forEach(t => {
     const card = el(\`
       <div class="card">
-        <div class="icon-circle">\${weatherEmoji(t.wetter)}</div>
+        \${tourIconHtml(t)}
         <div class="card-body">
           <div class="card-title">\${escapeHtml(t.ort)}</div>
           <div class="card-meta"><span>Besucht · \${fmtDate(t.datum_von)}</span></div>
@@ -1081,6 +1237,24 @@ function renderRueckblickTab() {
     \`));
   });
 
+  const sicherung = el(\`
+    <div class="sicherung-card">
+      <div class="year-card-head">💾 Datensicherung</div>
+      <p class="sicherung-text">Alle \${state.touren.length} Touren und die ToDrive-Liste als Datei herunterladen – zum Aufbewahren oder Weiterverarbeiten. Fotos sind nicht enthalten.</p>
+      <div class="sicherung-buttons">
+        <button class="btn-primary" id="export-xlsx" style="background: var(--sky); box-shadow: 3px 3px 0 var(--accent);">Excel-Datei</button>
+        <button class="btn-primary" id="export-csv" style="background: var(--card); color: var(--sky); border: 2px solid var(--sky); box-shadow: 3px 3px 0 var(--sky);">CSV-Datei</button>
+      </div>
+    </div>
+  \`);
+  sicherung.querySelector('#export-xlsx').onclick = () => {
+    try { exportiereXlsx(); } catch (e) { zeigeHinweis('Export fehlgeschlagen. Bitte nochmal versuchen.'); }
+  };
+  sicherung.querySelector('#export-csv').onclick = () => {
+    try { exportiereCsv(); } catch (e) { zeigeHinweis('Export fehlgeschlagen. Bitte nochmal versuchen.'); }
+  };
+  box.appendChild(sicherung);
+
   return box;
 }
 
@@ -1104,6 +1278,7 @@ function renderSucheTab() {
     state.sucheQuery = q;
     state.sucheLoading = true;
     state.sucheMessage = '';
+    state.sucheAddedIds = {};
     btn.disabled = true;
     btn.textContent = '…';
     try {
@@ -1129,7 +1304,8 @@ function renderSucheTab() {
     return box;
   }
   state.sucheResults.forEach((r, i) => {
-    const already = state.favoriten.some(f => f.ort === r.name) || state.sucheAddedIds[i];
+    const platzKey = r.name + '|' + r.lat + '|' + r.lon;
+    const already = state.favoriten.some(f => f.ort === r.name) || state.sucheAddedIds[platzKey];
     const metaTeile = [escapeHtml(r.typ)];
     if (r.distanzKm != null) metaTeile.push(r.distanzKm + ' km entfernt');
     else if (r.adresse) metaTeile.push(escapeHtml(r.adresse));
@@ -1149,7 +1325,7 @@ function renderSucheTab() {
     if (!already) {
       card.querySelector('.add-todrive-btn').onclick = async (e) => {
         e.stopPropagation();
-        state.sucheAddedIds[i] = true;
+        state.sucheAddedIds[platzKey] = true;
         await zuToDriveHinzufuegen(r);
       };
     }
@@ -1158,7 +1334,7 @@ function renderSucheTab() {
   return box;
 }
 
-function renderForm(editTour) {
+function renderForm(editTour, vorlage) {
   const isEdit = !!editTour;
   const form = isEdit ? {
     ort: editTour.ort || '',
@@ -1183,6 +1359,15 @@ function renderForm(editTour) {
     mobilfunk: editTour.mobilfunk || '',
     wlan: editTour.wlan || '',
     stromKosten: editTour.strom_kosten || '',
+  } : vorlage ? {
+    // "Nochmal hinfahren": nur Platzdaten übernehmen, alles Besuchsbezogene bleibt leer
+    ort: vorlage.ort || '', typ: vorlage.typ || 'Stellplatz', datumVon: '', datumBis: '',
+    kosten: '', wetter: ['sonnig'], bewertung: 4, notizen: '',
+    strom: !!vorlage.strom, boden: (vorlage.boden || '').split(',').filter(Boolean),
+    sanitaer: !!vorlage.sanitaer, bezahlung: (vorlage.bezahlung || '').split(',').filter(Boolean),
+    broetchenservice: !!vorlage.broetchenservice, umgebung: vorlage.umgebung || '',
+    nachttemperatur: '', tagestemperatur: '', anreiseZeit: '', abreiseZeit: '', zeiten24h: !!vorlage.zeiten_24h,
+    mobilfunk: vorlage.mobilfunk || '', wlan: vorlage.wlan || '', stromKosten: vorlage.strom ? (vorlage.strom_kosten || '') : '',
   } : {
     ort: '', typ: 'Stellplatz', datumVon: '', datumBis: '',
     kosten: '', wetter: ['sonnig'], bewertung: 4, notizen: '',
@@ -1194,9 +1379,25 @@ function renderForm(editTour) {
   const [abreiseH, abreiseM] = (form.abreiseZeit || '').split(':');
   const wrap = el('<div></div>');
   wrap.innerHTML = \`
-    <div class="top-row"><div class="top-row-left"><button class="btn-back">\${ICON_BACK}</button><h1>\${isEdit ? 'Tour bearbeiten' : 'Neue Tour eintragen'}</h1></div></div>
+    <div class="top-row"><div class="top-row-left"><button class="btn-back">\${ICON_BACK}</button><h1>\${isEdit ? 'Tour bearbeiten' : vorlage ? 'Nochmal hinfahren' : 'Neue Tour eintragen'}</h1></div></div>
+    \${vorlage ? \`<div class="vorlage-hinweis">Platzdaten von deinem letzten Besuch sind übernommen – trag noch Datum, Wetter und Bewertung ein.</div>\` : ''}
     <form id="tour-form">
-      <label class="field"><span class="field-label">Ort / Platzname</span><input name="ort" required placeholder="z. B. Campingplatz Seeblick" value="\${escapeHtml(form.ort)}" /></label>
+      <label class="field"><span class="field-label">Ort / Platzname</span><input name="ort" required list="bekannte-orte" autocomplete="off" placeholder="z. B. Campingplatz Seeblick" value="\${escapeHtml(form.ort)}" /></label>
+      <datalist id="bekannte-orte">\${bekannteOrte().map(o => \`<option value="\${escapeHtml(o)}"></option>\`).join('')}</datalist>
+      <div class="field" style="margin-bottom:16px;">
+        <span class="field-label">📷 Titelbild</span>
+        <div class="foto-feld" id="foto-feld">
+          <img id="foto-vorschau" class="foto-vorschau \${isEdit && editTour.foto_stand ? '' : 'hidden'}" src="\${isEdit && editTour.foto_stand ? fotoUrl(editTour) : ''}" alt="" />
+          <div class="foto-buttons">
+            <label class="filter-toggle foto-waehlen">
+              <span id="foto-waehlen-text">\${isEdit && editTour.foto_stand ? 'Foto ändern' : 'Foto auswählen'}</span>
+              <input type="file" accept="image/*" id="foto-input" hidden />
+            </label>
+            <button type="button" class="filter-toggle \${isEdit && editTour.foto_stand ? '' : 'hidden'}" id="foto-entfernen">Entfernen</button>
+          </div>
+          <div class="foto-status hidden" id="foto-status"></div>
+        </div>
+      </div>
       <label class="field"><span class="field-label">Art des Platzes</span>
         <div class="choice-row" id="typ-row">
           \${PLATZ_TYPEN.map(t => \`<button type="button" class="choice-btn \${t === form.typ ? 'sel' : ''}" data-typ="\${t}">\${t}</button>\`).join('')}
@@ -1281,8 +1482,48 @@ function renderForm(editTour) {
     </form>
   \`;
   wrap.querySelector('.btn-back').onclick = () => {
-    state.view = isEdit ? 'detail' : 'home';
+    if (vorlage) {
+      state.activeId = vorlage.id;
+      state.vorlageId = null;
+      state.view = 'detail';
+    } else {
+      state.view = isEdit ? 'detail' : 'home';
+    }
     render();
+  };
+
+  // Titelbild: auswählen (wird direkt verkleinert) oder entfernen
+  let fotoNeu = null;
+  let fotoEntfernen = false;
+  const fotoInput = wrap.querySelector('#foto-input');
+  const fotoVorschau = wrap.querySelector('#foto-vorschau');
+  const fotoEntfernenBtn = wrap.querySelector('#foto-entfernen');
+  const fotoStatus = wrap.querySelector('#foto-status');
+  fotoInput.onchange = async () => {
+    const datei = fotoInput.files && fotoInput.files[0];
+    if (!datei) return;
+    fotoStatus.textContent = 'Foto wird vorbereitet …';
+    fotoStatus.classList.remove('hidden');
+    try {
+      fotoNeu = await bildVerkleinern(datei);
+      fotoEntfernen = false;
+      fotoVorschau.src = fotoNeu;
+      fotoVorschau.classList.remove('hidden');
+      fotoEntfernenBtn.classList.remove('hidden');
+      wrap.querySelector('#foto-waehlen-text').textContent = 'Foto ändern';
+      fotoStatus.classList.add('hidden');
+    } catch (e) {
+      fotoStatus.textContent = 'Dieses Bild konnte nicht gelesen werden. Bitte ein anderes wählen.';
+    }
+  };
+  fotoEntfernenBtn.onclick = () => {
+    fotoNeu = null;
+    fotoEntfernen = isEdit && !!editTour.foto_stand;
+    fotoInput.value = '';
+    fotoVorschau.classList.add('hidden');
+    fotoVorschau.removeAttribute('src');
+    fotoEntfernenBtn.classList.add('hidden');
+    wrap.querySelector('#foto-waehlen-text').textContent = 'Foto auswählen';
   };
 
   wrap.querySelectorAll('#typ-row .choice-btn').forEach(btn => {
@@ -1373,7 +1614,7 @@ function renderForm(editTour) {
     e.preventDefault();
     const fd = new FormData(e.target);
     const payload = {
-      ort: fd.get('ort'),
+      ort: vereinheitlicheOrt(fd.get('ort')),
       typ: form.typ,
       datumVon: fd.get('datumVon'),
       datumBis: fd.get('datumBis') || null,
@@ -1389,8 +1630,8 @@ function renderForm(editTour) {
       umgebung: form.umgebung || null,
       nachttemperatur: fd.get('nachttemperatur') || null,
       tagestemperatur: fd.get('tagestemperatur') || null,
-      anreiseZeit: (fd.get('anreiseStunde') && fd.get('anreiseMinute')) ? fd.get('anreiseStunde') + ':' + fd.get('anreiseMinute') : null,
-      abreiseZeit: (fd.get('abreiseStunde') && fd.get('abreiseMinute')) ? fd.get('abreiseStunde') + ':' + fd.get('abreiseMinute') : null,
+      anreiseZeit: fd.get('anreiseStunde') ? fd.get('anreiseStunde') + ':' + (fd.get('anreiseMinute') || '00') : null,
+      abreiseZeit: fd.get('abreiseStunde') ? fd.get('abreiseStunde') + ':' + (fd.get('abreiseMinute') || '00') : null,
       zeiten24h: form.zeiten24h,
       mobilfunk: form.mobilfunk || null,
       wlan: form.wlan || null,
@@ -1402,20 +1643,47 @@ function renderForm(editTour) {
       errBox.classList.remove('hidden');
       return;
     }
+    if (payload.datumBis && payload.datumBis < payload.datumVon) {
+      errBox.textContent = 'Das "Bis"-Datum liegt vor dem "Von"-Datum. Bitte prüfen.';
+      errBox.classList.remove('hidden');
+      errBox.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
     const submitBtn = wrap.querySelector('#submit-btn');
     submitBtn.disabled = true;
     submitBtn.textContent = 'Speichern …';
     try {
+      let tourId;
       if (isEdit) {
         await api('/api/touren/' + editTour.id, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        tourId = editTour.id;
         state.view = 'detail';
         state.activeId = editTour.id;
         state.editingId = null;
       } else {
-        await api('/api/touren', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        const neu = await api('/api/touren', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        tourId = neu.id;
         state.view = 'home';
+        state.vorlageId = null;
       }
-      await loadData();
+      // Titelbild separat speichern – schlägt das fehl, bleibt die Tour trotzdem gespeichert
+      try {
+        if (fotoNeu) {
+          submitBtn.textContent = 'Foto wird hochgeladen …';
+          await api('/api/touren/' + tourId + '/foto', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: fotoNeu, mime: 'image/jpeg' }) });
+        } else if (fotoEntfernen) {
+          await api('/api/touren/' + tourId + '/foto', { method: 'DELETE' });
+        }
+      } catch (fotoFehler) {
+        zeigeHinweis('Tour gespeichert – das Foto konnte aber nicht hochgeladen werden. Über "Bearbeiten" nochmal versuchen.');
+      }
+      try {
+        await loadData();
+      } catch (ladeFehler) {
+        // Gespeichert ist die Tour bereits – nur die Liste konnte nicht neu geladen werden
+        render();
+        zeigeHinweis('Gespeichert. Die Liste aktualisiert sich, sobald wieder Verbindung besteht.');
+      }
     } catch (err) {
       errBox.textContent = 'Speichern hat nicht geklappt. Bitte nochmal versuchen.';
       errBox.classList.remove('hidden');
@@ -1439,6 +1707,7 @@ function renderDetail() {
       </div>
     </div>
     <div id="confirm-slot"></div>
+    \${t.foto_stand ? \`<img class="detail-foto" src="\${fotoUrl(t)}" alt="Foto vom Platz" />\` : ''}
     <div style="display:flex; gap:10px; align-items:flex-start; margin-bottom:4px;">
       <span class="pin-icon" style="margin-top:2px;">\${ICON_PIN}</span>
       <h1 style="font-size:28px; margin:0;">\${escapeHtml(t.ort)}</h1>
@@ -1452,7 +1721,7 @@ function renderDetail() {
       \${t.mobilfunk ? \`<div class="detail-row"><span class="detail-label">Mobilfunk</span><span>📶 \${escapeHtml(t.mobilfunk)}</span></div>\` : ''}
       \${t.wlan ? \`<div class="detail-row"><span class="detail-label">WLAN</span><span>📡 \${escapeHtml(t.wlan)}</span></div>\` : ''}
       \${t.bezahlung ? \`<div class="detail-row"><span class="detail-label">Bezahlen</span><span>\${escapeHtml(t.bezahlung.split(',').filter(Boolean).join(', '))}</span></div>\` : ''}
-      \${t.kosten ? \`<div class="detail-row"><span class="detail-label">Kosten</span><span>\${parseFloat(t.kosten).toFixed(2)} €</span></div>\` : ''}
+      \${(t.kosten != null && t.kosten !== '') ? \`<div class="detail-row"><span class="detail-label">Kosten</span><span>\${parseFloat(t.kosten) === 0 ? 'kostenlos' : parseFloat(t.kosten).toFixed(2) + ' €'}</span></div>\` : ''}
       <div class="detail-row"><span class="detail-label">Wetter</span><span>\${weatherEmoji(t.wetter)} \${weatherLabel(t.wetter)}</span></div>
       \${t.tagestemperatur != null ? \`<div class="detail-row"><span class="detail-label">Tagestemp.</span><span>☀️ \${t.tagestemperatur}°C</span></div>\` : ''}
       \${t.nachttemperatur != null ? \`<div class="detail-row"><span class="detail-label">Nachttemp.</span><span>🌙 \${t.nachttemperatur}°C</span></div>\` : ''}
@@ -1464,9 +1733,11 @@ function renderDetail() {
       <button class="btn-primary" id="fav-toggle-btn" style="flex:1; min-width:180px; background: var(--sky); box-shadow: 3px 3px 0 var(--accent);">\${t.favorit ? '★ Aus Favoriten entfernen' : '☆ Zu Favoriten hinzufügen'}</button>
       <button class="btn-primary" id="maps-btn" style="flex:1; min-width:180px; background: var(--accent); box-shadow: 3px 3px 0 var(--sky); display:flex; align-items:center; justify-content:center; gap:8px;">\${ICON_PIN} Auf Google Maps öffnen</button>
     </div>
+    <button class="btn-primary" id="nochmal-btn" style="margin-top:12px; background: var(--card); color: var(--sky); border: 2px solid var(--sky); box-shadow: 3px 3px 0 var(--sky);">🔁 Nochmal hinfahren</button>
   \`;
   wrap.querySelector('.btn-back').onclick = () => { state.view = 'home'; render(); };
-  wrap.querySelector('#edit-toggle').onclick = () => { state.editingId = t.id; state.view = 'form'; render(); };
+  wrap.querySelector('#edit-toggle').onclick = () => { state.editingId = t.id; state.vorlageId = null; state.view = 'form'; render(); };
+  wrap.querySelector('#nochmal-btn').onclick = () => { state.editingId = null; state.vorlageId = t.id; state.view = 'form'; render(); window.scrollTo(0, 0); };
   wrap.querySelector('#fav-toggle-btn').onclick = async () => { await toggleFavorit(t.id); state.view = 'detail'; render(); };
   wrap.querySelector('#maps-btn').onclick = () => openMaps(null, t.ort);
   wrap.querySelector('#del-toggle').onclick = () => {
@@ -1497,7 +1768,290 @@ if ('serviceWorker' in navigator) {
   });
 }
 
-loadData();
+// ---- Datensicherung: Excel (.xlsx) und CSV, ganz ohne externe Bibliothek ----
+
+const EXPORT_SPALTEN = [
+  { titel: 'Ort', breite: 30, wert: t => t.ort },
+  { titel: 'Art', breite: 14, wert: t => t.typ },
+  { titel: 'Von', breite: 12, typ: 'datum', wert: t => t.datum_von },
+  { titel: 'Bis', breite: 12, typ: 'datum', wert: t => t.datum_bis },
+  { titel: 'Nächte', breite: 8, typ: 'zahl', wert: t => exportNaechte(t) },
+  { titel: 'Anreise', breite: 9, wert: t => t.zeiten_24h ? '24 h' : (t.anreise_zeit || '') },
+  { titel: 'Abreise', breite: 9, wert: t => t.zeiten_24h ? '24 h' : (t.abreise_zeit || '') },
+  { titel: 'Kosten (€)', breite: 11, typ: 'geld', wert: t => (t.kosten === null || t.kosten === undefined || t.kosten === '') ? null : Number(t.kosten) },
+  { titel: 'Bewertung', breite: 10, typ: 'zahl', wert: t => t.bewertung },
+  { titel: 'Favorit', breite: 8, wert: t => t.favorit ? 'ja' : '' },
+  { titel: 'Wetter', breite: 18, wert: t => weatherLabel(t.wetter) },
+  { titel: 'Tag °C', breite: 8, typ: 'zahl', wert: t => t.tagestemperatur },
+  { titel: 'Nacht °C', breite: 9, typ: 'zahl', wert: t => t.nachttemperatur },
+  { titel: 'Strom', breite: 8, wert: t => t.strom ? 'ja' : '' },
+  { titel: 'Strom-Kosten', breite: 14, wert: t => t.strom ? (t.strom_kosten || '') : '' },
+  { titel: 'Sanitär', breite: 8, wert: t => t.sanitaer ? 'ja' : '' },
+  { titel: 'Brötchen', breite: 9, wert: t => t.broetchenservice ? 'ja' : '' },
+  { titel: 'Boden', breite: 16, wert: t => (t.boden || '').split(',').filter(Boolean).join(', ') },
+  { titel: 'Bezahlen', breite: 16, wert: t => (t.bezahlung || '').split(',').filter(Boolean).join(', ') },
+  { titel: 'Umgebung', breite: 10, wert: t => t.umgebung },
+  { titel: 'Mobilfunk', breite: 13, wert: t => t.mobilfunk },
+  { titel: 'WLAN', breite: 13, wert: t => t.wlan },
+  { titel: 'Notizen', breite: 40, wert: t => t.notizen },
+];
+
+const TODRIVE_SPALTEN = [
+  { titel: 'Platz', breite: 32, wert: f => f.ort },
+  { titel: 'Notiz', breite: 50, wert: f => f.notiz },
+  { titel: 'Breitengrad', breite: 12, typ: 'zahl', wert: f => f.lat },
+  { titel: 'Längengrad', breite: 12, typ: 'zahl', wert: f => f.lon },
+];
+
+function exportNaechte(t) {
+  if (!t.datum_von || !t.datum_bis) return 1;
+  const diff = Math.round((new Date(t.datum_bis) - new Date(t.datum_von)) / 86400000);
+  return Math.max(1, diff);
+}
+
+function exportTourenSortiert() {
+  return [...state.touren].sort((a, b) => (a.datum_von || '').localeCompare(b.datum_von || ''));
+}
+
+function exportDateiname(endung) {
+  const d = new Date();
+  const p = n => String(n).padStart(2, '0');
+  return 'CamperLog-Sicherung-' + d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + '.' + endung;
+}
+
+function dateiHerunterladen(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
+// --- CSV (Semikolon + BOM, damit deutsches Excel Spalten und Umlaute richtig erkennt) ---
+function csvWert(v) {
+  if (v === null || v === undefined) return '';
+  let s = typeof v === 'number' ? String(v).replace('.', ',') : String(v);
+  if (/[";\\r\\n]/.test(s)) s = '"' + s.replace(/"/g, '""') + '"';
+  return s;
+}
+
+function baueCsv(zeilen, spalten) {
+  const out = [spalten.map(s => csvWert(s.titel)).join(';')];
+  zeilen.forEach(z => {
+    out.push(spalten.map(s => {
+      const w = s.wert(z);
+      if (s.typ === 'datum' && w) return fmtDate(w);
+      return csvWert(w);
+    }).join(';'));
+  });
+  return '﻿' + out.join('\\r\\n');
+}
+
+function exportiereCsv() {
+  const csv = baueCsv(exportTourenSortiert(), EXPORT_SPALTEN);
+  dateiHerunterladen(new Blob([csv], { type: 'text/csv;charset=utf-8' }), exportDateiname('csv'));
+}
+
+// --- XLSX: Excel-Datei = ZIP-Archiv mit ein paar XML-Dateien ---
+function xmlEsc(s) {
+  return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
+    .replace(/[\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F]/g, '');
+}
+
+function spaltenBuchstabe(i) {
+  let s = '';
+  i++;
+  while (i > 0) { const r = (i - 1) % 26; s = String.fromCharCode(65 + r) + s; i = Math.floor((i - 1) / 26); }
+  return s;
+}
+
+function excelDatum(iso) {
+  const m = /^(\\d{4})-(\\d{2})-(\\d{2})$/.exec(iso || '');
+  if (!m) return null;
+  return (Date.UTC(+m[1], +m[2] - 1, +m[3]) - Date.UTC(1899, 11, 30)) / 86400000;
+}
+
+function baueSheetXml(zeilen, spalten) {
+  // Stile: 0 = normal, 1 = Überschrift fett, 2 = Datum, 3 = Geldbetrag
+  let rows = '<row r="1">' + spalten.map((s, i) =>
+    '<c r="' + spaltenBuchstabe(i) + '1" t="inlineStr" s="1"><is><t>' + xmlEsc(s.titel) + '</t></is></c>').join('') + '</row>';
+  zeilen.forEach((z, zi) => {
+    const r = zi + 2;
+    let cells = '';
+    spalten.forEach((s, i) => {
+      const ref = spaltenBuchstabe(i) + r;
+      let w = s.wert(z);
+      if (w === null || w === undefined || w === '') return;
+      if (s.typ === 'datum') {
+        const serial = excelDatum(w);
+        if (serial !== null) { cells += '<c r="' + ref + '" s="2"><v>' + serial + '</v></c>'; return; }
+      }
+      if ((s.typ === 'zahl' || s.typ === 'geld') && !isNaN(Number(w))) {
+        cells += '<c r="' + ref + '"' + (s.typ === 'geld' ? ' s="3"' : '') + '><v>' + Number(w) + '</v></c>';
+        return;
+      }
+      cells += '<c r="' + ref + '" t="inlineStr"><is><t xml:space="preserve">' + xmlEsc(w) + '</t></is></c>';
+    });
+    rows += '<row r="' + r + '">' + cells + '</row>';
+  });
+  const cols = '<cols>' + spalten.map((s, i) => '<col min="' + (i + 1) + '" max="' + (i + 1) + '" width="' + s.breite + '" customWidth="1"/>').join('') + '</cols>';
+  return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+    '<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>' +
+    cols + '<sheetData>' + rows + '</sheetData></worksheet>';
+}
+
+const CRC_TABELLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+
+function crc32(bytes) {
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < bytes.length; i++) c = CRC_TABELLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+
+// Einfaches ZIP ohne Kompression ("stored") – reicht für Excel völlig
+function baueZip(dateien) {
+  const enc = new TextEncoder();
+  const teile = [];
+  const zentral = [];
+  let offset = 0;
+  dateien.forEach(d => {
+    const name = enc.encode(d.name);
+    const daten = enc.encode(d.inhalt);
+    const crc = crc32(daten);
+    const kopf = new DataView(new ArrayBuffer(30));
+    kopf.setUint32(0, 0x04034b50, true);
+    kopf.setUint16(4, 20, true);
+    kopf.setUint16(6, 0x0800, true);
+    kopf.setUint16(8, 0, true);
+    kopf.setUint32(14, crc, true);
+    kopf.setUint32(18, daten.length, true);
+    kopf.setUint32(22, daten.length, true);
+    kopf.setUint16(26, name.length, true);
+    teile.push(new Uint8Array(kopf.buffer), name, daten);
+    const z = new DataView(new ArrayBuffer(46));
+    z.setUint32(0, 0x02014b50, true);
+    z.setUint16(4, 20, true);
+    z.setUint16(6, 20, true);
+    z.setUint16(8, 0x0800, true);
+    z.setUint32(16, crc, true);
+    z.setUint32(20, daten.length, true);
+    z.setUint32(24, daten.length, true);
+    z.setUint16(28, name.length, true);
+    z.setUint32(42, offset, true);
+    zentral.push(new Uint8Array(z.buffer), name);
+    offset += 30 + name.length + daten.length;
+  });
+  const zentralGroesse = zentral.reduce((s, b) => s + b.length, 0);
+  const ende = new DataView(new ArrayBuffer(22));
+  ende.setUint32(0, 0x06054b50, true);
+  ende.setUint16(8, dateien.length, true);
+  ende.setUint16(10, dateien.length, true);
+  ende.setUint32(12, zentralGroesse, true);
+  ende.setUint32(16, offset, true);
+  return new Blob([...teile, ...zentral, new Uint8Array(ende.buffer)], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+}
+
+function baueXlsx() {
+  const kopf = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
+  return baueZip([
+    { name: '[Content_Types].xml', inhalt: kopf + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+      '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+      '<Default Extension="xml" ContentType="application/xml"/>' +
+      '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' +
+      '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' +
+      '<Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' +
+      '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>' +
+      '</Types>' },
+    { name: '_rels/.rels', inhalt: kopf + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+      '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>' +
+      '</Relationships>' },
+    { name: 'xl/workbook.xml', inhalt: kopf + '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+      '<sheets><sheet name="Touren" sheetId="1" r:id="rId1"/><sheet name="ToDrive" sheetId="2" r:id="rId2"/></sheets></workbook>' },
+    { name: 'xl/_rels/workbook.xml.rels', inhalt: kopf + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+      '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>' +
+      '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>' +
+      '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>' +
+      '</Relationships>' },
+    { name: 'xl/styles.xml', inhalt: kopf + '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+      '<numFmts count="1"><numFmt numFmtId="164" formatCode="dd.mm.yyyy"/></numFmts>' +
+      '<fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts>' +
+      '<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>' +
+      '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>' +
+      '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>' +
+      '<cellXfs count="4">' +
+      '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>' +
+      '<xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/>' +
+      '<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>' +
+      '<xf numFmtId="4" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>' +
+      '</cellXfs><cellStyles count="1"><cellStyle name="Standard" xfId="0" builtinId="0"/></cellStyles></styleSheet>' },
+    { name: 'xl/worksheets/sheet1.xml', inhalt: baueSheetXml(exportTourenSortiert(), EXPORT_SPALTEN) },
+    { name: 'xl/worksheets/sheet2.xml', inhalt: baueSheetXml(state.favoriten, TODRIVE_SPALTEN) },
+  ]);
+}
+
+function exportiereXlsx() {
+  dateiHerunterladen(baueXlsx(), exportDateiname('xlsx'));
+}
+
+function zeigeHinweis(text) {
+  let t = document.getElementById('toast');
+  if (!t) {
+    t = document.createElement('div');
+    t.id = 'toast';
+    t.className = 'toast';
+    document.body.appendChild(t);
+  }
+  t.textContent = text;
+  t.classList.add('show');
+  clearTimeout(zeigeHinweis._timer);
+  zeigeHinweis._timer = setTimeout(() => t.classList.remove('show'), 3500);
+}
+
+window.addEventListener('unhandledrejection', (ev) => {
+  const msg = ev.reason && ev.reason.message ? ev.reason.message : '';
+  ev.preventDefault();
+  if (msg === 'Nicht angemeldet.') return;
+  zeigeHinweis(navigator.onLine === false
+    ? 'Keine Internetverbindung – Aktion konnte nicht gespeichert werden.'
+    : 'Das hat nicht geklappt. Bitte nochmal versuchen.');
+});
+
+function zeigeLadefehler(e) {
+  const app = document.getElementById('app');
+  app.innerHTML = '';
+  const box = el(\`
+    <div style="padding-top:60px; text-align:center;">
+      <img src="/icon-192.jpg" class="logo-badge" style="width:64px;height:64px;margin-bottom:16px;" alt="" />
+      <h1 style="font-size:24px;">Daten konnten nicht geladen werden</h1>
+      <p style="color:var(--ink); font-size:15px; line-height:1.5; margin:12px 0 22px;">Prüfe die Internetverbindung und versuch es nochmal. Offline werden die zuletzt geladenen Daten angezeigt, sobald sie einmal geladen wurden.</p>
+      <button class="btn-primary" id="retry-btn">Nochmal versuchen</button>
+    </div>
+  \`);
+  box.querySelector('#retry-btn').onclick = () => starteApp();
+  app.appendChild(box);
+}
+
+async function starteApp() {
+  try {
+    await loadData();
+  } catch (e) {
+    zeigeLadefehler(e);
+  }
+}
+
+starteApp();
 </script>
 </body>
 </html>`;
@@ -1638,7 +2192,7 @@ export default {
           status: 302,
           headers: {
             Location: "/",
-            "Set-Cookie": `camperlog_pw=${encodeURIComponent(pw)}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax`,
+            "Set-Cookie": `camperlog_pw=${encodeURIComponent(pw)}; Path=/; Max-Age=31536000; HttpOnly; Secure; SameSite=Lax`,
           },
         });
       }
