@@ -449,7 +449,7 @@ const HTML = `<!DOCTYPE html>
   * { box-sizing: border-box; }
   body::before {
     content: ''; position: fixed; inset: 0; z-index: -1; pointer-events: none;
-    background: linear-gradient(rgba(242,230,204,.5), rgba(242,230,204,.5)), url(/hintergrund-1.jpg) center / cover no-repeat;
+    background: linear-gradient(rgba(242,230,204,.74), rgba(242,230,204,.74)), url(/hintergrund-1.jpg) center / cover no-repeat;
   }
   body {
     margin: 0;
@@ -460,6 +460,8 @@ const HTML = `<!DOCTYPE html>
   .mono { font-family: 'Courier New', ui-monospace, monospace; }
   .wrap { max-width: 640px; margin: 0 auto; padding: 0 20px 110px; }
   h1 { font-size: 34px; line-height: 1.15; color: var(--sky); margin: 0 0 6px; }
+  /* Texte, die direkt auf dem Hintergrundbild stehen: heller Schein für bessere Lesbarkeit */
+  h1, h2, .eyebrow, .count { text-shadow: 0 0 3px rgba(242,230,204,.95), 0 0 9px rgba(242,230,204,.9), 0 0 18px rgba(242,230,204,.85); }
   .eyebrow {
     display: flex; align-items: center; gap: 10px;
     font-family: 'Courier New', monospace; font-size: 16px; font-weight: 700;
@@ -488,7 +490,7 @@ const HTML = `<!DOCTYPE html>
     display: inline-flex; align-items: center; justify-content: center;
     width: 40px; height: 40px; margin-top: 14px;
     color: #b5482f; text-decoration: none;
-    background: rgba(181,72,47,.08); border: 2px solid rgba(181,72,47,.25);
+    background: var(--card); border: 2px solid rgba(181,72,47,.4);
     border-radius: 999px; padding: 0;
   }
   .yt-link:hover { background: rgba(181,72,47,.15); border-color: #b5482f; }
