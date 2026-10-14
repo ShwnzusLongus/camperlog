@@ -579,7 +579,7 @@ const HTML = `<!DOCTYPE html>
     display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 17px;
   }
   .card-body { flex: 1; min-width: 0; }
-  .card-title { font-weight: 700; color: var(--sky); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .card-title { font-weight: 700; color: var(--sky); white-space: normal; overflow-wrap: anywhere; line-height: 1.25; }
   .card-meta { font-family: 'Courier New', monospace; font-size: 13px; font-weight: 700; color: var(--muted); margin-top: 4px; display: flex; gap: 6px; flex-wrap: wrap; }
   .fav-star { font-size: 18px; cursor: pointer; flex-shrink: 0; background: none; border: none; padding: 4px; line-height: 1; }
   .stars { color: var(--accent); font-size: 14px; letter-spacing: 1px; flex-shrink: 0; }
