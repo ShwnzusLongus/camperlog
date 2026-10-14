@@ -581,6 +581,9 @@ const HTML = `<!DOCTYPE html>
   .card-body { flex: 1; min-width: 0; }
   .card-title { font-weight: 700; color: var(--sky); white-space: normal; overflow-wrap: anywhere; line-height: 1.25; }
   .card-meta { font-family: 'Courier New', monospace; font-size: 13px; font-weight: 700; color: var(--muted); margin-top: 4px; display: flex; gap: 6px; flex-wrap: wrap; }
+  .card-bottom { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 4px 10px; }
+  .card-bottom .card-meta { flex: 1 1 auto; min-width: 0; }
+  .card-actions { display: flex; align-items: center; gap: 6px; margin-left: auto; flex-shrink: 0; margin-top: 4px; }
   .fav-star { font-size: 18px; cursor: pointer; flex-shrink: 0; background: none; border: none; padding: 4px; line-height: 1; }
   .stars { color: var(--accent); font-size: 14px; letter-spacing: 1px; flex-shrink: 0; }
 
@@ -1181,10 +1184,14 @@ function renderTourCard(t) {
       \${tourIconHtml(t)}
       <div class="card-body">
         <div class="card-title">\${escapeHtml(t.ort)}</div>
-        <div class="card-meta"><span>\${fmtDate(t.datum_von)}</span><span>·</span><span>\${escapeHtml(t.typ)}</span>\${t.strom ? '<span>⚡</span>' : ''}\${t.sanitaer ? '<span>🚿</span>' : ''}\${t.broetchenservice ? '<span>🥐</span>' : ''}</div>
+        <div class="card-bottom">
+          <div class="card-meta"><span>\${fmtDate(t.datum_von)}</span><span>·</span><span>\${escapeHtml(t.typ)}</span>\${t.strom ? '<span>⚡</span>' : ''}\${t.sanitaer ? '<span>🚿</span>' : ''}\${t.broetchenservice ? '<span>🥐</span>' : ''}</div>
+          <div class="card-actions">
+            <div class="stars">\${starsStr(t.bewertung || 0)}</div>
+            <button class="fav-star">\${t.favorit ? '★' : '☆'}</button>
+          </div>
+        </div>
       </div>
-      <div class="stars">\${starsStr(t.bewertung || 0)}</div>
-      <button class="fav-star">\${t.favorit ? '★' : '☆'}</button>
     </div>
   \`);
   card.querySelector('.fav-star').onclick = (e) => { e.stopPropagation(); toggleFavorit(t.id); };
