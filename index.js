@@ -684,11 +684,33 @@ const HTML = `<!DOCTYPE html>
     border: 2px solid var(--sky-soft); background: var(--sky-soft);
   }
   .detail-foto {
-    width: 100%; max-height: 280px; object-fit: cover; border-radius: 14px;
+    width: 100%; max-height: 420px; object-fit: cover; border-radius: 14px;
     border: 2px solid var(--sky-soft); margin-bottom: 18px; display: block; background: var(--sky-soft);
   }
   .foto-feld { display: flex; flex-direction: column; gap: 10px; }
-  .foto-vorschau { width: 100%; max-height: 200px; object-fit: cover; border-radius: 12px; border: 2px solid var(--sky-soft); }
+  .foto-vorschau { width: 100%; max-height: 300px; object-fit: contain; border-radius: 12px; border: 2px solid var(--sky-soft); background: var(--sky-soft); }
+  .crop-overlay {
+    position: fixed; inset: 0; z-index: 1000; background: #14202b; color: #fff;
+    display: flex; flex-direction: column; gap: 10px; padding: 14px 16px calc(14px + env(safe-area-inset-bottom));
+  }
+  .crop-head { font-weight: 700; font-size: 18px; text-align: center; }
+  .crop-ratios { display: flex; gap: 8px; justify-content: center; }
+  .crop-ratio {
+    background: transparent; color: #fff; border: 2px solid rgba(255,255,255,.35); border-radius: 8px;
+    padding: 8px 14px; font-size: 14px; font-weight: 700; cursor: pointer; font-family: inherit;
+  }
+  .crop-ratio.sel { background: #fff; color: #14202b; border-color: #fff; }
+  .crop-stage { flex: 1; min-height: 0; position: relative; overflow: hidden; touch-action: none; cursor: grab; border-radius: 10px; }
+  .crop-img { position: absolute; max-width: none; user-select: none; -webkit-user-drag: none; pointer-events: none; transform-origin: center center; }
+  .crop-frame {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    border: 2px solid #fff; border-radius: 4px; box-shadow: 0 0 0 9999px rgba(0,0,0,.6); pointer-events: none;
+  }
+  .crop-hint { text-align: center; font-size: 13px; opacity: .75; }
+  .crop-zoom { width: 100%; }
+  .crop-actions { display: flex; gap: 10px; }
+  .crop-actions .filter-toggle { flex: 0 0 auto; padding: 0 18px; }
+  .crop-actions .btn-primary { flex: 1; width: auto; }
   .foto-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
   .foto-waehlen { display: inline-flex; align-items: center; }
   .foto-status { font-size: 14px; color: var(--muted); font-weight: 600; }
@@ -810,28 +832,146 @@ function tourIconHtml(t) {
   if (t.foto_stand) return '<img class="card-thumb" src="' + fotoUrl(t) + '" alt="" loading="lazy" />';
   return '<div class="icon-circle">' + weatherEmoji((t.wetter || '').split(',')[0]) + '</div>';
 }
-// Foto auf dem Handy verkleinern, bevor es hochgeladen wird (schneller, spart Speicher)
-function bildVerkleinern(datei) {
+// Bildausschnitt wählen: Bild mit dem Finger verschieben und zoomen (zwei Finger, Mausrad oder Regler),
+// der Rahmen hat das gewählte Seitenverhältnis. Das Ergebnis wird gleich verkleinert (schneller, spart Speicher).
+// Liefert eine JPEG-Data-URL, oder null wenn abgebrochen wurde.
+function bildZuschneiden(src) {
   return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(datei);
     const img = new Image();
+    img.onerror = () => reject(new Error('Bild konnte nicht gelesen werden.'));
     img.onload = () => {
-      URL.revokeObjectURL(url);
-      const versuch = (maxKante, qualitaet) => {
-        const faktor = Math.min(1, maxKante / Math.max(img.naturalWidth, img.naturalHeight));
-        const canvas = document.createElement('canvas');
-        canvas.width = Math.round(img.naturalWidth * faktor);
-        canvas.height = Math.round(img.naturalHeight * faktor);
-        canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
-        return canvas.toDataURL('image/jpeg', qualitaet);
+      const iw = img.naturalWidth, ih = img.naturalHeight;
+      const ov = document.createElement('div');
+      ov.className = 'crop-overlay';
+      ov.innerHTML =
+        '<div class="crop-head">Ausschnitt wählen</div>' +
+        '<div class="crop-ratios">' +
+          '<button type="button" class="crop-ratio sel" data-r="1.3333333">4:3</button>' +
+          '<button type="button" class="crop-ratio" data-r="1.7777778">16:9</button>' +
+          '<button type="button" class="crop-ratio" data-r="1">Quadrat</button>' +
+        '</div>' +
+        '<div class="crop-stage"><img class="crop-img" alt="" /><div class="crop-frame"></div></div>' +
+        '<div class="crop-hint">Bild verschieben und mit zwei Fingern zoomen</div>' +
+        '<input type="range" class="crop-zoom" min="0" max="100" value="0" aria-label="Zoom" />' +
+        '<div class="crop-actions">' +
+          '<button type="button" class="filter-toggle crop-cancel">Abbrechen</button>' +
+          '<button type="button" class="btn-primary crop-ok">Übernehmen</button>' +
+        '</div>';
+      const stage = ov.querySelector('.crop-stage');
+      const im = ov.querySelector('.crop-img');
+      const frame = ov.querySelector('.crop-frame');
+      const zoom = ov.querySelector('.crop-zoom');
+      im.src = src;
+      im.style.width = iw + 'px';
+      im.style.height = ih + 'px';
+      document.body.appendChild(ov);
+
+      let ratio = 4 / 3, fw = 0, fh = 0, minS = 1, s = 1, tx = 0, ty = 0;
+      function apply() {
+        s = Math.max(minS, Math.min(minS * 5, s));
+        const mx = Math.max(0, (iw * s - fw) / 2);
+        const my = Math.max(0, (ih * s - fh) / 2);
+        tx = Math.max(-mx, Math.min(mx, tx));
+        ty = Math.max(-my, Math.min(my, ty));
+        im.style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + s + ')';
+        zoom.value = Math.round((s / minS - 1) / 4 * 100);
+      }
+      function layout(behalten) {
+        const sw = stage.clientWidth, sh = stage.clientHeight;
+        fw = Math.min(sw - 32, (sh - 32) * ratio);
+        fh = fw / ratio;
+        frame.style.width = fw + 'px';
+        frame.style.height = fh + 'px';
+        im.style.left = (sw / 2 - iw / 2) + 'px';
+        im.style.top = (sh / 2 - ih / 2) + 'px';
+        minS = Math.max(fw / iw, fh / ih);
+        if (!behalten || s < minS) s = minS;
+        apply();
+      }
+      const beiResize = () => layout(true);
+      window.addEventListener('resize', beiResize);
+      layout(false);
+
+      ov.querySelectorAll('.crop-ratio').forEach(btn => {
+        btn.onclick = () => {
+          ratio = Number(btn.dataset.r);
+          ov.querySelectorAll('.crop-ratio').forEach(b => b.classList.toggle('sel', b === btn));
+          layout(true);
+        };
+      });
+
+      // Verschieben (ein Finger) und Zoomen (zwei Finger)
+      const zeiger = new Map();
+      stage.addEventListener('pointerdown', e => {
+        stage.setPointerCapture(e.pointerId);
+        zeiger.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      });
+      stage.addEventListener('pointermove', e => {
+        const alt = zeiger.get(e.pointerId);
+        if (!alt) return;
+        const neu = { x: e.clientX, y: e.clientY };
+        if (zeiger.size === 1) {
+          tx += neu.x - alt.x;
+          ty += neu.y - alt.y;
+        } else if (zeiger.size === 2) {
+          let andere = null;
+          zeiger.forEach((p, id) => { if (id !== e.pointerId) andere = p; });
+          const dAlt = Math.hypot(alt.x - andere.x, alt.y - andere.y);
+          const dNeu = Math.hypot(neu.x - andere.x, neu.y - andere.y);
+          if (dAlt > 0) {
+            const f = dNeu / dAlt;
+            s *= f; tx *= f; ty *= f;
+          }
+          tx += (neu.x - alt.x) / 2;
+          ty += (neu.y - alt.y) / 2;
+        }
+        zeiger.set(e.pointerId, neu);
+        apply();
+      });
+      const zeigerEnde = e => { zeiger.delete(e.pointerId); };
+      stage.addEventListener('pointerup', zeigerEnde);
+      stage.addEventListener('pointercancel', zeigerEnde);
+      stage.addEventListener('wheel', e => {
+        e.preventDefault();
+        const f = e.deltaY < 0 ? 1.1 : 1 / 1.1;
+        s *= f; tx *= f; ty *= f;
+        apply();
+      }, { passive: false });
+      zoom.oninput = () => {
+        const alt = s;
+        s = minS * (1 + Number(zoom.value) / 100 * 4);
+        const f = s / alt;
+        tx *= f; ty *= f;
+        apply();
       };
-      let daten = versuch(1280, 0.72);
-      if (daten.length > 900000) daten = versuch(1000, 0.6);
-      if (daten.length > 900000) daten = versuch(800, 0.5);
-      resolve(daten);
+
+      function schliessen(ergebnis) {
+        window.removeEventListener('resize', beiResize);
+        ov.remove();
+        resolve(ergebnis);
+      }
+      ov.querySelector('.crop-cancel').onclick = () => schliessen(null);
+      ov.querySelector('.crop-ok').onclick = () => {
+        // Bereich des Originalbilds, der im Rahmen liegt
+        const sw = fw / s, sh = fh / s;
+        const sx = Math.max(0, Math.min(iw - sw, iw / 2 - tx / s - sw / 2));
+        const sy = Math.max(0, Math.min(ih - sh, ih / 2 - ty / s - sh / 2));
+        const versuch = (maxBreite, qualitaet) => {
+          const w = Math.round(Math.min(maxBreite, sw));
+          const h = Math.round(w * sh / sw);
+          const canvas = document.createElement('canvas');
+          canvas.width = w;
+          canvas.height = h;
+          canvas.getContext('2d').drawImage(img, sx, sy, sw, sh, 0, 0, w, h);
+          return canvas.toDataURL('image/jpeg', qualitaet);
+        };
+        let daten = versuch(1280, 0.72);
+        if (daten.length > 900000) daten = versuch(1000, 0.6);
+        if (daten.length > 900000) daten = versuch(800, 0.5);
+        schliessen(daten);
+      };
     };
-    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Bild konnte nicht gelesen werden.')); };
-    img.src = url;
+    img.src = src;
   });
 }
 // Gleicher Platz, nur anders geschrieben (Groß/klein, Leerzeichen)? Dann bekannte Schreibweise nehmen
@@ -1393,6 +1533,7 @@ function renderForm(editTour, vorlage) {
               <span id="foto-waehlen-text">\${isEdit && editTour.foto_stand ? 'Foto ändern' : 'Foto auswählen'}</span>
               <input type="file" accept="image/*" id="foto-input" hidden />
             </label>
+            <button type="button" class="filter-toggle \${isEdit && editTour.foto_stand ? '' : 'hidden'}" id="foto-ausschnitt">Ausschnitt ändern</button>
             <button type="button" class="filter-toggle \${isEdit && editTour.foto_stand ? '' : 'hidden'}" id="foto-entfernen">Entfernen</button>
           </div>
           <div class="foto-status hidden" id="foto-status"></div>
@@ -1492,28 +1633,52 @@ function renderForm(editTour, vorlage) {
     render();
   };
 
-  // Titelbild: auswählen (wird direkt verkleinert) oder entfernen
+  // Titelbild: auswählen, Ausschnitt festlegen (wird dabei verkleinert) oder entfernen
   let fotoNeu = null;
   let fotoEntfernen = false;
   const fotoInput = wrap.querySelector('#foto-input');
   const fotoVorschau = wrap.querySelector('#foto-vorschau');
   const fotoEntfernenBtn = wrap.querySelector('#foto-entfernen');
+  const fotoAusschnittBtn = wrap.querySelector('#foto-ausschnitt');
   const fotoStatus = wrap.querySelector('#foto-status');
   fotoInput.onchange = async () => {
     const datei = fotoInput.files && fotoInput.files[0];
     if (!datei) return;
-    fotoStatus.textContent = 'Foto wird vorbereitet …';
+    fotoStatus.textContent = 'Foto wird geladen …';
     fotoStatus.classList.remove('hidden');
+    const url = URL.createObjectURL(datei);
     try {
-      fotoNeu = await bildVerkleinern(datei);
+      const ergebnis = await bildZuschneiden(url);
+      fotoStatus.classList.add('hidden');
+      if (!ergebnis) { fotoInput.value = ''; return; }
+      fotoNeu = ergebnis;
       fotoEntfernen = false;
       fotoVorschau.src = fotoNeu;
       fotoVorschau.classList.remove('hidden');
       fotoEntfernenBtn.classList.remove('hidden');
+      fotoAusschnittBtn.classList.remove('hidden');
       wrap.querySelector('#foto-waehlen-text').textContent = 'Foto ändern';
-      fotoStatus.classList.add('hidden');
     } catch (e) {
       fotoStatus.textContent = 'Dieses Bild konnte nicht gelesen werden. Bitte ein anderes wählen.';
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  };
+  // Ausschnitt des aktuellen Fotos (neu gewählt oder bereits gespeichert) nochmal anpassen
+  fotoAusschnittBtn.onclick = async () => {
+    const quelle = fotoNeu || (isEdit && editTour.foto_stand && !fotoEntfernen ? fotoUrl(editTour) : null);
+    if (!quelle) return;
+    fotoStatus.textContent = 'Foto wird geladen …';
+    fotoStatus.classList.remove('hidden');
+    try {
+      const ergebnis = await bildZuschneiden(quelle);
+      fotoStatus.classList.add('hidden');
+      if (!ergebnis) return;
+      fotoNeu = ergebnis;
+      fotoEntfernen = false;
+      fotoVorschau.src = fotoNeu;
+    } catch (e) {
+      fotoStatus.textContent = 'Das Foto konnte nicht geladen werden.';
     }
   };
   fotoEntfernenBtn.onclick = () => {
@@ -1523,6 +1688,7 @@ function renderForm(editTour, vorlage) {
     fotoVorschau.classList.add('hidden');
     fotoVorschau.removeAttribute('src');
     fotoEntfernenBtn.classList.add('hidden');
+    fotoAusschnittBtn.classList.add('hidden');
     wrap.querySelector('#foto-waehlen-text').textContent = 'Foto auswählen';
   };
 
