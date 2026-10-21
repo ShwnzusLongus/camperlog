@@ -759,6 +759,46 @@ const HTML = `<!DOCTYPE html>
   .ycg-val { display: block; font-weight: 700; font-size: 18px; color: var(--accent); }
   .ycg-label { font-family: 'Courier New', monospace; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); }
   .year-card-fav { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--sky-soft); font-size: 14px; font-weight: 600; color: var(--ink); }
+
+  .stat-card { background: var(--card); border: 2px solid var(--sky-soft); border-radius: 14px; padding: 18px; margin-bottom: 18px; }
+  .stat-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 16px; }
+  .stat-controls .filter-select { flex: 1 1 140px; min-width: 0; }
+  .stat-print { flex: 1 1 100%; width: auto; padding: 12px; font-size: 15px; }
+  .stat-report { color: var(--ink); font-family: Georgia, 'Iowan Old Style', serif; }
+  .stat-report * { text-shadow: none; }
+  .sr-title { font-size: 20px; font-weight: 700; color: var(--sky); }
+  .sr-sub { font-family: 'Courier New', monospace; font-size: 12px; font-weight: 700; color: var(--muted); margin: 2px 0 14px; }
+  .sr-tiles { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-bottom: 14px; }
+  .sr-tile { border: 1px solid var(--sky-soft); border-radius: 10px; padding: 8px 6px; text-align: center; }
+  .sr-val { display: block; font-weight: 700; font-size: 18px; color: var(--accent); }
+  .sr-lab { font-family: 'Courier New', monospace; font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--muted); }
+  .sr-list { margin: 0 0 14px; padding-left: 18px; font-size: 14px; line-height: 1.5; }
+  .sr-h { font-family: 'Courier New', monospace; font-weight: 700; font-size: 13px; text-transform: uppercase; letter-spacing: .1em; color: var(--sky); margin: 16px 0 6px; padding-bottom: 4px; border-bottom: 1px solid var(--sky-soft); }
+  .sr-scroll { overflow-x: auto; }
+  .sr-table { border-collapse: collapse; width: 100%; font-size: 13px; line-height: 1.35; }
+  .sr-table th, .sr-table td { border: 1px solid var(--sky-soft); padding: 5px 7px; text-align: left; vertical-align: top; }
+  .sr-table thead th { background: rgba(47,111,158,.12); }
+  .sr-small th { width: 110px; background: rgba(47,111,158,.08); }
+  .sr-touren { min-width: 760px; }
+  .sr-table .nw { white-space: nowrap; }
+  #print-area { display: none; }
+  @media (min-width: 560px) { .sr-tiles { grid-template-columns: repeat(5, 1fr); } }
+  @page { size: A4 landscape; margin: 12mm; }
+  @media print {
+    html, body.printing { background: #fff !important; }
+    body.printing::before { display: none !important; }
+    body.printing > *:not(#print-area) { display: none !important; }
+    body.printing #print-area { display: block; }
+    body.printing .stat-report { color: #000; font-size: 11pt; }
+    body.printing .sr-title { font-size: 20pt; color: #1d4f75; }
+    body.printing .sr-tiles { grid-template-columns: repeat(5, 1fr); }
+    body.printing .sr-tile, body.printing .sr-table th, body.printing .sr-table td { border-color: #999; }
+    body.printing .sr-scroll { overflow: visible; }
+    body.printing .sr-touren { min-width: 0; font-size: 9.5pt; }
+    body.printing .sr-table tr { break-inside: avoid; }
+    body.printing .sr-h { break-after: avoid; }
+    body.printing { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  }
 </style>
 </head>
 <body>
@@ -812,6 +852,8 @@ let state = {
   tourenSort: 'datum_neu',
   tourenFilterUmgebung: '',
   tourenFilterFavorit: false,
+  statModus: 'monat', // monat | jahr
+  statPeriode: '',
 };
 
 function weatherEmoji(value) {
@@ -1310,6 +1352,179 @@ function renderFavoritenTab() {
   return box;
 }
 
+// ---- Statistik (monatlich / jährlich) mit Druckfunktion ----
+const MONATSNAMEN = ['Januar', 'Februar', 'März', 'April', 'Mai', 'Juni', 'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember'];
+function fmtEuro(n) { return Number(n || 0).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €'; }
+function fmtZahl(n, stellen) { return Number(n).toLocaleString('de-DE', { minimumFractionDigits: stellen, maximumFractionDigits: stellen }); }
+function statPerioden(modus) {
+  const set = new Set();
+  state.touren.forEach(t => { if (t.datum_von) set.add(t.datum_von.slice(0, modus === 'jahr' ? 4 : 7)); });
+  return [...set].sort((a, b) => b.localeCompare(a));
+}
+function statPeriodeLabel(modus, p) {
+  if (modus === 'jahr') return p;
+  return MONATSNAMEN[parseInt(p.slice(5, 7), 10) - 1] + ' ' + p.slice(0, 4);
+}
+function statVerteilung(touren, fn) {
+  const z = {};
+  touren.forEach(t => { fn(t).forEach(k => { z[k] = (z[k] || 0) + 1; }); });
+  return Object.entries(z).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'de')).map(e => e[0] + ' ' + e[1] + '×').join(' · ');
+}
+function statistikBerichtHtml(modus, periode) {
+  const label = statPeriodeLabel(modus, periode);
+  const touren = state.touren
+    .filter(t => t.datum_von && t.datum_von.slice(0, modus === 'jahr' ? 4 : 7) === periode)
+    .sort((a, b) => a.datum_von.localeCompare(b.datum_von));
+  const kopf = '<div class="sr-head"><div class="sr-title">Unterwegs mit Iva – Statistik ' + escapeHtml(label) + '</div>' +
+    '<div class="sr-sub">' + (modus === 'jahr' ? 'Jahresstatistik' : 'Monatsstatistik') + ' · erstellt am ' + new Date().toLocaleDateString('de-DE') + '</div></div>';
+  if (!touren.length) return kopf + '<div class="empty">Keine Touren in diesem Zeitraum.</div>';
+
+  const num = v => v !== null && v !== undefined && v !== '' && !isNaN(parseFloat(v));
+  const mittel = a => a.length ? a.reduce((s, x) => s + x, 0) / a.length : null;
+  const naechte = touren.reduce((s, t) => s + exportNaechte(t), 0);
+  const kosten = touren.reduce((s, t) => s + (parseFloat(t.kosten) || 0), 0);
+  const plaetze = new Set(touren.map(t => t.ort.trim().toLowerCase())).size;
+  const bew = touren.map(t => t.bewertung).filter(b => b);
+  const avgBew = mittel(bew);
+  const tage = touren.map(t => t.tagestemperatur).filter(num).map(parseFloat);
+  const nachts = touren.map(t => t.nachttemperatur).filter(num).map(parseFloat);
+  const avgTag = mittel(tage), avgNacht = mittel(nachts);
+
+  const kachel = (wert, name) => '<div class="sr-tile"><span class="sr-val">' + wert + '</span><span class="sr-lab">' + name + '</span></div>';
+  let html = kopf + '<div class="sr-tiles">' +
+    kachel(touren.length, 'Touren') +
+    kachel(naechte, 'Nächte') +
+    kachel(plaetze, 'Verschiedene Plätze') +
+    kachel(fmtEuro(kosten), 'Kosten gesamt') +
+    kachel(naechte ? fmtEuro(kosten / naechte) : '–', 'Ø Kosten / Nacht') +
+    kachel(avgBew !== null ? fmtZahl(avgBew, 1) + ' ★' : '–', 'Ø Bewertung' + (bew.length ? ' (' + bew.length + ' bewertet)' : '')) +
+    kachel(avgTag !== null ? fmtZahl(avgTag, 1) + ' °C' : '–', 'Ø Tagestemp.') +
+    kachel(avgNacht !== null ? fmtZahl(avgNacht, 1) + ' °C' : '–', 'Ø Nachttemp.') +
+    (nachts.length ? kachel(fmtZahl(Math.min.apply(null, nachts), 1) + ' °C', 'Kälteste Nacht') : '') +
+    (tage.length ? kachel(fmtZahl(Math.max.apply(null, tage), 1) + ' °C', 'Wärmster Tag') : '') +
+    '</div>';
+
+  // Highlights
+  const ortZ = {};
+  touren.forEach(t => { const k = t.ort.trim(); ortZ[k] = (ortZ[k] || 0) + 1; });
+  const topOrt = Object.entries(ortZ).sort((a, b) => b[1] - a[1])[0];
+  const beste = touren.filter(t => t.bewertung).sort((a, b) => b.bewertung - a.bewertung)[0];
+  const teuerster = touren.filter(t => parseFloat(t.kosten) > 0).sort((a, b) => parseFloat(b.kosten) - parseFloat(a.kosten))[0];
+  const hl = [];
+  if (topOrt && topOrt[1] > 1) hl.push('<li><b>Lieblingsplatz:</b> ' + escapeHtml(topOrt[0]) + ' (' + topOrt[1] + '× besucht)</li>');
+  if (beste) hl.push('<li><b>Bestbewertet:</b> ' + escapeHtml(beste.ort) + ' (' + starsStr(beste.bewertung) + ')</li>');
+  if (teuerster) hl.push('<li><b>Teuerste Tour:</b> ' + escapeHtml(teuerster.ort) + ' (' + fmtEuro(teuerster.kosten) + ')</li>');
+  if (hl.length) html += '<ul class="sr-list">' + hl.join('') + '</ul>';
+
+  // Verteilungen
+  const ausst = [];
+  const anz = fn => touren.filter(fn).length;
+  if (anz(t => t.strom)) ausst.push('Strom ' + anz(t => t.strom) + '×');
+  if (anz(t => t.sanitaer)) ausst.push('Sanitär ' + anz(t => t.sanitaer) + '×');
+  if (anz(t => t.broetchenservice)) ausst.push('Brötchenservice ' + anz(t => t.broetchenservice) + '×');
+  if (anz(t => t.favorit)) ausst.push('Favoriten ' + anz(t => t.favorit) + '×');
+  const verteil = [
+    ['Platzart', statVerteilung(touren, t => [t.typ].filter(Boolean))],
+    ['Umgebung', statVerteilung(touren, t => umgebungListe(t.umgebung))],
+    ['Wetter', statVerteilung(touren, t => (t.wetter || '').split(',').filter(Boolean).map(k => weatherLabel(k)))],
+    ['Ausstattung', ausst.join(' · ')],
+    ['Boden', statVerteilung(touren, t => (t.boden || '').split(',').filter(Boolean))],
+    ['Bezahlung', statVerteilung(touren, t => (t.bezahlung || '').split(',').filter(Boolean))],
+  ].filter(v => v[1]);
+  if (verteil.length) {
+    html += '<div class="sr-h">Verteilung</div><table class="sr-table sr-small"><tbody>' +
+      verteil.map(v => '<tr><th>' + v[0] + '</th><td>' + escapeHtml(v[1]) + '</td></tr>').join('') + '</tbody></table>';
+  }
+
+  // Jahresstatistik: Aufschlüsselung nach Monaten
+  if (modus === 'jahr') {
+    let zeilen = '';
+    for (let m = 1; m <= 12; m++) {
+      const key = periode + '-' + String(m).padStart(2, '0');
+      const mt = touren.filter(t => t.datum_von.slice(0, 7) === key);
+      if (!mt.length) continue;
+      const mb = mt.map(t => t.bewertung).filter(b => b);
+      zeilen += '<tr><td>' + MONATSNAMEN[m - 1] + '</td><td>' + mt.length + '</td><td>' + mt.reduce((s, t) => s + exportNaechte(t), 0) + '</td><td>' +
+        fmtEuro(mt.reduce((s, t) => s + (parseFloat(t.kosten) || 0), 0)) + '</td><td>' + (mb.length ? fmtZahl(mittel(mb), 1) + ' ★' : '–') + '</td></tr>';
+    }
+    html += '<div class="sr-h">Nach Monaten</div><div class="sr-scroll"><table class="sr-table"><thead><tr><th>Monat</th><th>Touren</th><th>Nächte</th><th>Kosten</th><th>Ø Bewertung</th></tr></thead><tbody>' + zeilen + '</tbody></table></div>';
+  }
+
+  // Alle Touren mit allen Infos
+  const zeilen = touren.map(t => {
+    const bis = t.datum_bis && t.datum_bis !== t.datum_von ? ' – ' + fmtDate(t.datum_bis) : '';
+    const temp = [];
+    if (num(t.tagestemperatur)) temp.push('Tag ' + t.tagestemperatur + '°');
+    if (num(t.nachttemperatur)) temp.push('Nacht ' + t.nachttemperatur + '°');
+    const zeit = t.zeiten_24h ? '24 h' : [t.anreise_zeit ? 'an ' + t.anreise_zeit : '', t.abreise_zeit ? 'ab ' + t.abreise_zeit : ''].filter(Boolean).join(', ');
+    const info = [];
+    const aus = [];
+    if (t.strom) aus.push('Strom' + (t.strom_kosten ? ' (' + t.strom_kosten + ')' : ''));
+    if (t.sanitaer) aus.push('Sanitär');
+    if (t.broetchenservice) aus.push('Brötchenservice');
+    if (aus.length) info.push(aus.join(', '));
+    const umg = umgebungListe(t.umgebung).join(', ');
+    if (umg) info.push('Umgebung: ' + umg);
+    if (t.boden) info.push('Boden: ' + t.boden.split(',').filter(Boolean).join(', '));
+    if (t.bezahlung) info.push('Bezahlung: ' + t.bezahlung.split(',').filter(Boolean).join(', '));
+    if (t.mobilfunk) info.push('Mobilfunk: ' + t.mobilfunk);
+    if (t.wlan) info.push('WLAN: ' + t.wlan);
+    if (zeit) info.push(zeit);
+    return '<tr>' +
+      '<td class="nw">' + fmtDate(t.datum_von) + bis + '</td>' +
+      '<td><b>' + escapeHtml(t.ort) + '</b>' + (t.favorit ? ' ★' : '') + '<br/>' + escapeHtml(t.typ || '') + '</td>' +
+      '<td>' + exportNaechte(t) + '</td>' +
+      '<td class="nw">' + (num(t.kosten) ? fmtEuro(t.kosten) : '–') + '</td>' +
+      '<td class="nw">' + (t.bewertung ? starsStr(t.bewertung) : '–') + '</td>' +
+      '<td>' + escapeHtml(weatherLabel(t.wetter)) + (temp.length ? '<br/>' + temp.join(', ') : '') + '</td>' +
+      '<td>' + escapeHtml(info.join(' · ')) + '</td>' +
+      '<td>' + escapeHtml(t.notizen || '') + '</td></tr>';
+  }).join('');
+  html += '<div class="sr-h">Alle Touren</div><div class="sr-scroll"><table class="sr-table sr-touren"><thead><tr><th>Datum</th><th>Ort / Art</th><th>Nächte</th><th>Kosten</th><th>Bewertung</th><th>Wetter</th><th>Ausstattung &amp; Details</th><th>Notizen</th></tr></thead><tbody>' + zeilen + '</tbody></table></div>';
+  return html;
+}
+function druckeStatistik(modus, periode) {
+  const alt = document.getElementById('print-area');
+  if (alt) alt.remove();
+  const area = document.createElement('div');
+  area.id = 'print-area';
+  area.innerHTML = '<div class="stat-report">' + statistikBerichtHtml(modus, periode) + '</div>';
+  document.body.appendChild(area);
+  document.body.classList.add('printing');
+  const aufraeumen = () => {
+    document.body.classList.remove('printing');
+    area.remove();
+    window.removeEventListener('afterprint', aufraeumen);
+  };
+  window.addEventListener('afterprint', aufraeumen);
+  setTimeout(() => window.print(), 100);
+}
+function renderStatistikKarte() {
+  const card = el('<div class="stat-card"></div>');
+  if (!state.statModus) state.statModus = 'monat';
+  function zeichne() {
+    const modus = state.statModus;
+    const perioden = statPerioden(modus);
+    if (!perioden.includes(state.statPeriode)) state.statPeriode = perioden[0] || '';
+    card.innerHTML =
+      '<div class="year-card-head">📈 Statistik</div>' +
+      '<div class="stat-controls">' +
+        '<button type="button" class="filter-toggle ' + (modus === 'monat' ? 'active' : '') + '" data-modus="monat">Monatlich</button>' +
+        '<button type="button" class="filter-toggle ' + (modus === 'jahr' ? 'active' : '') + '" data-modus="jahr">Jährlich</button>' +
+        '<select class="filter-select" id="stat-periode">' +
+          perioden.map(p => '<option value="' + p + '"' + (p === state.statPeriode ? ' selected' : '') + '>' + escapeHtml(statPeriodeLabel(modus, p)) + '</option>').join('') +
+        '</select>' +
+        '<button type="button" class="btn-primary stat-print" id="stat-print">🖨️ Drucken / als PDF</button>' +
+      '</div>' +
+      '<div class="stat-report">' + (state.statPeriode ? statistikBerichtHtml(modus, state.statPeriode) : '') + '</div>';
+    card.querySelectorAll('[data-modus]').forEach(b => { b.onclick = () => { state.statModus = b.dataset.modus; zeichne(); }; });
+    card.querySelector('#stat-periode').onchange = (e) => { state.statPeriode = e.target.value; zeichne(); };
+    card.querySelector('#stat-print').onclick = () => { if (state.statPeriode) druckeStatistik(modus, state.statPeriode); };
+  }
+  zeichne();
+  return card;
+}
+
 function renderRueckblickTab() {
   const box = el('<div></div>');
   if (state.touren.length === 0) {
@@ -1337,6 +1552,7 @@ function renderRueckblickTab() {
   Object.entries(ortCount).forEach(([ort, c]) => { if (c > topCount) { topOrt = ort; topCount = c; } });
 
   box.appendChild(el(\`<div class="section-head"><h2>📊 Rückblick</h2></div>\`));
+  box.appendChild(renderStatistikKarte());
 
   if (topOrt && topCount > 1) {
     box.appendChild(el(\`
