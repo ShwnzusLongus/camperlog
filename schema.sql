@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS touren (
   fahrzeug TEXT,
   kosten REAL,
   wetter TEXT DEFAULT 'sonnig',
-  bewertung INTEGER DEFAULT 4,
+  bewertung INTEGER,
   notizen TEXT,
   favorit INTEGER NOT NULL DEFAULT 0,
   erstellt_am TEXT NOT NULL DEFAULT (datetime('now')),

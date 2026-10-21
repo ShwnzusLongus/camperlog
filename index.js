@@ -155,7 +155,7 @@ async function handleApi(request, env, url) {
         body.datumBis || null,
         body.kosten !== undefined && body.kosten !== null && body.kosten !== "" ? parseFloat(body.kosten) : null,
         body.wetter || "sonnig",
-        body.bewertung ? parseInt(body.bewertung) : 4,
+        body.bewertung ? parseInt(body.bewertung) : null,
         body.notizen || null,
         body.strom ? 1 : 0,
         body.boden || null,
@@ -194,7 +194,7 @@ async function handleApi(request, env, url) {
         body.datumBis || null,
         body.kosten !== undefined && body.kosten !== null && body.kosten !== "" ? parseFloat(body.kosten) : null,
         body.wetter || "sonnig",
-        body.bewertung ? parseInt(body.bewertung) : 4,
+        body.bewertung ? parseInt(body.bewertung) : null,
         body.notizen || null,
         body.strom ? 1 : 0,
         body.boden || null,
@@ -775,7 +775,7 @@ const WEATHER = [
 const PLATZ_TYPEN = ['Campingplatz', 'Stellplatz', 'Wildcamping'];
 const BODEN_TYPEN = ['Schotter', 'Rasen', 'Sand', 'Asphalt', 'Wiese', 'Sonstiges'];
 const BEZAHLUNG_TYPEN = ['Bar', 'Karte', 'Online'];
-const UMGEBUNG_TYPEN = ['Natur', 'Stadt', 'Beides'];
+const UMGEBUNG_TYPEN = ['Natur', 'Stadt', 'Beides', 'Therme'];
 const SIGNAL_STUFEN = ['Kein Empfang', 'Schwach', 'Mittel', 'Gut', 'Stark'];
 const STROM_KOSTEN_TYPEN = ['Inbegriffen', 'Kostenpflichtig'];
 
@@ -1222,6 +1222,7 @@ function renderTourenTab() {
         <option value="Natur">Natur</option>
         <option value="Stadt">Stadt</option>
         <option value="Beides">Beides</option>
+        <option value="Therme">Therme</option>
       </select>
       <button id="fav-filter-btn" class="filter-toggle \${state.tourenFilterFavorit ? 'active' : ''}">★ Nur Favoriten</button>
     </div>
@@ -1496,7 +1497,7 @@ function renderForm(editTour, vorlage) {
     datumBis: editTour.datum_bis || '',
     kosten: editTour.kosten != null ? String(editTour.kosten) : '',
     wetter: (editTour.wetter || 'sonnig').split(',').filter(Boolean),
-    bewertung: editTour.bewertung || 4,
+    bewertung: editTour.bewertung || null,
     notizen: editTour.notizen || '',
     strom: !!editTour.strom,
     boden: (editTour.boden || '').split(',').filter(Boolean),
@@ -1515,7 +1516,7 @@ function renderForm(editTour, vorlage) {
   } : vorlage ? {
     // "Nochmal hinfahren": nur Platzdaten übernehmen, alles Besuchsbezogene bleibt leer
     ort: vorlage.ort || '', typ: vorlage.typ || 'Stellplatz', datumVon: '', datumBis: '',
-    kosten: '', wetter: ['sonnig'], bewertung: 4, notizen: '',
+    kosten: '', wetter: ['sonnig'], bewertung: null, notizen: '',
     strom: !!vorlage.strom, boden: (vorlage.boden || '').split(',').filter(Boolean),
     sanitaer: !!vorlage.sanitaer, bezahlung: (vorlage.bezahlung || '').split(',').filter(Boolean),
     broetchenservice: !!vorlage.broetchenservice, umgebung: vorlage.umgebung || '',
@@ -1523,7 +1524,7 @@ function renderForm(editTour, vorlage) {
     mobilfunk: vorlage.mobilfunk || '', wlan: vorlage.wlan || '', stromKosten: vorlage.strom ? (vorlage.strom_kosten || '') : '',
   } : {
     ort: '', typ: 'Stellplatz', datumVon: '', datumBis: '',
-    kosten: '', wetter: ['sonnig'], bewertung: 4, notizen: '',
+    kosten: '', wetter: ['sonnig'], bewertung: null, notizen: '',
     strom: false, boden: [], sanitaer: false, bezahlung: [], broetchenservice: false, umgebung: '',
     nachttemperatur: '', tagestemperatur: '', anreiseZeit: '', abreiseZeit: '', zeiten24h: false,
     mobilfunk: '', wlan: '', stromKosten: '',
@@ -1784,7 +1785,9 @@ function renderForm(editTour, vorlage) {
   });
   wrap.querySelectorAll('#star-picker button').forEach(btn => {
     btn.onclick = () => {
-      form.bewertung = parseInt(btn.dataset.star);
+      // Nochmal auf den gewählten Stern tippen = Bewertung wieder entfernen
+      const stern = parseInt(btn.dataset.star);
+      form.bewertung = form.bewertung === stern ? null : stern;
       wrap.querySelectorAll('#star-picker button').forEach(b => b.classList.toggle('on', parseInt(b.dataset.star) <= form.bewertung));
     };
   });
