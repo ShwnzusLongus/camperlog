@@ -775,7 +775,15 @@ const WEATHER = [
 const PLATZ_TYPEN = ['Campingplatz', 'Stellplatz', 'Wildcamping'];
 const BODEN_TYPEN = ['Schotter', 'Rasen', 'Sand', 'Asphalt', 'Wiese', 'Sonstiges'];
 const BEZAHLUNG_TYPEN = ['Bar', 'Karte', 'Online'];
-const UMGEBUNG_TYPEN = ['Natur', 'Stadt', 'Beides', 'Therme'];
+const UMGEBUNG_TYPEN = ['Natur', 'Stadt', 'Therme'];
+// Umgebung ist mehrfach wählbar (kommagetrennt gespeichert). Alter Wert "Beides" = Natur + Stadt.
+function umgebungListe(wert) {
+  const liste = [];
+  (wert || '').split(',').map(x => x.trim()).filter(Boolean).forEach(x => {
+    (x === 'Beides' ? ['Natur', 'Stadt'] : [x]).forEach(y => { if (!liste.includes(y)) liste.push(y); });
+  });
+  return liste;
+}
 const SIGNAL_STUFEN = ['Kein Empfang', 'Schwach', 'Mittel', 'Gut', 'Stark'];
 const STROM_KOSTEN_TYPEN = ['Inbegriffen', 'Kostenpflichtig'];
 
@@ -1221,7 +1229,6 @@ function renderTourenTab() {
         <option value="">Alle Umgebungen</option>
         <option value="Natur">Natur</option>
         <option value="Stadt">Stadt</option>
-        <option value="Beides">Beides</option>
         <option value="Therme">Therme</option>
       </select>
       <button id="fav-filter-btn" class="filter-toggle \${state.tourenFilterFavorit ? 'active' : ''}">★ Nur Favoriten</button>
@@ -1239,7 +1246,7 @@ function renderTourenTab() {
   favBtn.onclick = () => { state.tourenFilterFavorit = !state.tourenFilterFavorit; render(); };
 
   let list = [...state.touren];
-  if (state.tourenFilterUmgebung) list = list.filter(t => (t.umgebung || '') === state.tourenFilterUmgebung);
+  if (state.tourenFilterUmgebung) list = list.filter(t => umgebungListe(t.umgebung).includes(state.tourenFilterUmgebung));
   if (state.tourenFilterFavorit) list = list.filter(t => t.favorit);
 
   box.querySelector('#touren-count').textContent = list.length + ' Einträge';
@@ -1504,7 +1511,7 @@ function renderForm(editTour, vorlage) {
     sanitaer: !!editTour.sanitaer,
     bezahlung: (editTour.bezahlung || '').split(',').filter(Boolean),
     broetchenservice: !!editTour.broetchenservice,
-    umgebung: editTour.umgebung || '',
+    umgebung: umgebungListe(editTour.umgebung),
     nachttemperatur: editTour.nachttemperatur != null ? String(editTour.nachttemperatur) : '',
     tagestemperatur: editTour.tagestemperatur != null ? String(editTour.tagestemperatur) : '',
     anreiseZeit: editTour.anreise_zeit || '',
@@ -1519,13 +1526,13 @@ function renderForm(editTour, vorlage) {
     kosten: '', wetter: ['sonnig'], bewertung: null, notizen: '',
     strom: !!vorlage.strom, boden: (vorlage.boden || '').split(',').filter(Boolean),
     sanitaer: !!vorlage.sanitaer, bezahlung: (vorlage.bezahlung || '').split(',').filter(Boolean),
-    broetchenservice: !!vorlage.broetchenservice, umgebung: vorlage.umgebung || '',
+    broetchenservice: !!vorlage.broetchenservice, umgebung: umgebungListe(vorlage.umgebung),
     nachttemperatur: '', tagestemperatur: '', anreiseZeit: '', abreiseZeit: '', zeiten24h: !!vorlage.zeiten_24h,
     mobilfunk: vorlage.mobilfunk || '', wlan: vorlage.wlan || '', stromKosten: vorlage.strom ? (vorlage.strom_kosten || '') : '',
   } : {
     ort: '', typ: 'Stellplatz', datumVon: '', datumBis: '',
     kosten: '', wetter: ['sonnig'], bewertung: null, notizen: '',
-    strom: false, boden: [], sanitaer: false, bezahlung: [], broetchenservice: false, umgebung: '',
+    strom: false, boden: [], sanitaer: false, bezahlung: [], broetchenservice: false, umgebung: [],
     nachttemperatur: '', tagestemperatur: '', anreiseZeit: '', abreiseZeit: '', zeiten24h: false,
     mobilfunk: '', wlan: '', stromKosten: '',
   };
@@ -1603,7 +1610,7 @@ function renderForm(editTour, vorlage) {
       </label>
       <label class="field"><span class="field-label">Umgebung</span>
         <div class="choice-row" id="umgebung-row">
-          \${UMGEBUNG_TYPEN.map(u => \`<button type="button" class="choice-btn \${u === form.umgebung ? 'sel' : ''}" data-umgebung="\${u}">\${u}</button>\`).join('')}
+          \${UMGEBUNG_TYPEN.map(u => \`<button type="button" class="choice-btn \${form.umgebung.includes(u) ? 'sel' : ''}" data-umgebung="\${u}">\${u}</button>\`).join('')}
         </div>
       </label>
       <label class="field"><span class="field-label">📶 Mobilfunk-Empfang</span>
@@ -1733,8 +1740,10 @@ function renderForm(editTour, vorlage) {
   // Umgebung: einfache Auswahl
   wrap.querySelectorAll('#umgebung-row .choice-btn').forEach(btn => {
     btn.onclick = () => {
-      form.umgebung = form.umgebung === btn.dataset.umgebung ? '' : btn.dataset.umgebung;
-      wrap.querySelectorAll('#umgebung-row .choice-btn').forEach(b => b.classList.toggle('sel', b.dataset.umgebung === form.umgebung));
+      const val = btn.dataset.umgebung;
+      if (form.umgebung.includes(val)) form.umgebung = form.umgebung.filter(u => u !== val);
+      else form.umgebung.push(val);
+      btn.classList.toggle('sel', form.umgebung.includes(val));
     };
   });
   wrap.querySelectorAll('#mobilfunk-row .choice-btn').forEach(btn => {
@@ -1809,7 +1818,7 @@ function renderForm(editTour, vorlage) {
       sanitaer: form.sanitaer,
       bezahlung: form.bezahlung.join(',') || null,
       broetchenservice: form.broetchenservice,
-      umgebung: form.umgebung || null,
+      umgebung: form.umgebung.join(',') || null,
       nachttemperatur: fd.get('nachttemperatur') || null,
       tagestemperatur: fd.get('tagestemperatur') || null,
       anreiseZeit: fd.get('anreiseStunde') ? fd.get('anreiseStunde') + ':' + (fd.get('anreiseMinute') || '00') : null,
@@ -1899,7 +1908,7 @@ function renderDetail() {
       <div class="detail-row"><span class="detail-label">Datum</span><span>\${fmtDate(t.datum_von)}\${t.datum_bis && t.datum_bis !== t.datum_von ? ' – ' + fmtDate(t.datum_bis) : ''}</span></div>
       \${t.zeiten_24h ? \`<div class="detail-row"><span class="detail-label">Zeiten</span><span>🕐 Rund um die Uhr</span></div>\` : (t.anreise_zeit || t.abreise_zeit) ? \`<div class="detail-row"><span class="detail-label">Zeiten</span><span>\${t.anreise_zeit ? 'An ' + t.anreise_zeit + ' Uhr' : ''}\${t.anreise_zeit && t.abreise_zeit ? ' · ' : ''}\${t.abreise_zeit ? 'Ab ' + t.abreise_zeit + ' Uhr' : ''}</span></div>\` : ''}
       \${t.boden ? \`<div class="detail-row"><span class="detail-label">Boden</span><span>\${escapeHtml(t.boden.split(',').filter(Boolean).join(', '))}</span></div>\` : ''}
-      \${t.umgebung ? \`<div class="detail-row"><span class="detail-label">Umgebung</span><span>\${escapeHtml(t.umgebung)}</span></div>\` : ''}
+      \${t.umgebung ? \`<div class="detail-row"><span class="detail-label">Umgebung</span><span>\${escapeHtml(umgebungListe(t.umgebung).join(', '))}</span></div>\` : ''}
       \${t.mobilfunk ? \`<div class="detail-row"><span class="detail-label">Mobilfunk</span><span>📶 \${escapeHtml(t.mobilfunk)}</span></div>\` : ''}
       \${t.wlan ? \`<div class="detail-row"><span class="detail-label">WLAN</span><span>📡 \${escapeHtml(t.wlan)}</span></div>\` : ''}
       \${t.bezahlung ? \`<div class="detail-row"><span class="detail-label">Bezahlen</span><span>\${escapeHtml(t.bezahlung.split(',').filter(Boolean).join(', '))}</span></div>\` : ''}
@@ -1972,7 +1981,7 @@ const EXPORT_SPALTEN = [
   { titel: 'Brötchen', breite: 9, wert: t => t.broetchenservice ? 'ja' : '' },
   { titel: 'Boden', breite: 16, wert: t => (t.boden || '').split(',').filter(Boolean).join(', ') },
   { titel: 'Bezahlen', breite: 16, wert: t => (t.bezahlung || '').split(',').filter(Boolean).join(', ') },
-  { titel: 'Umgebung', breite: 10, wert: t => t.umgebung },
+  { titel: 'Umgebung', breite: 10, wert: t => umgebungListe(t.umgebung).join(', ') },
   { titel: 'Mobilfunk', breite: 13, wert: t => t.mobilfunk },
   { titel: 'WLAN', breite: 13, wert: t => t.wlan },
   { titel: 'Notizen', breite: 40, wert: t => t.notizen },
