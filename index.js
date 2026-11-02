@@ -600,7 +600,7 @@ const HTML = `<!DOCTYPE html>
   /* FAB entfernt zugunsten des Hinzufügen-Buttons oben im Hero */
 
   label.field { display: block; margin-bottom: 16px; }
-  .field-label { font-family: 'Courier New', monospace; font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); display: block; margin-bottom: 7px; }
+  .field-label { font-family: 'Courier New', monospace; font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--ink); display: block; margin-bottom: 7px; text-shadow: 0 0 3px rgba(242,230,204,.95), 0 0 9px rgba(242,230,204,.9); }
   input, textarea, select {
     width: 100%; background: var(--card); border: 2px solid var(--sky-soft); border-radius: 8px;
     padding: 10px 12px; font-size: 15px; color: var(--ink); font-family: inherit;
@@ -614,11 +614,33 @@ const HTML = `<!DOCTYPE html>
     background: var(--card); color: var(--sky); font-size: 14px; font-weight: 700; cursor: pointer; font-family: inherit;
   }
   .choice-btn.sel { background: var(--sky); border-color: var(--sky); color: var(--paper); }
-  .weather-btn { flex-direction: column; display: flex; align-items: center; gap: 4px; flex: none; width: 78px; }
-  .signal-btn { flex: 1 1 auto; min-width: 74px; padding: 10px 8px; font-size: 13px; }
-  .star-picker { display: flex; gap: 4px; }
-  .star-picker button { background: none; border: none; font-size: 26px; cursor: pointer; color: var(--sky-soft); }
+  .weather-btn { flex-direction: column; display: flex; align-items: center; gap: 4px; flex: 1 1 0; min-width: 0; width: auto; padding: 8px 2px; }
+  #wetter-row, #mobilfunk-row, #wlan-row, #typ-row { flex-wrap: nowrap; gap: 6px; }
+  #typ-row .choice-btn { min-width: 0; padding: 10px 2px; font-size: 14px; }
+  #boden-row .choice-btn { flex: 1 1 calc(33.333% - 6px); min-width: 0; padding: 10px 2px; }
+  #boden-row { gap: 6px; }
+  #ausstattung-row .choice-btn { min-width: 0; padding: 10px 4px; white-space: nowrap; }
+  .signal-btn { flex: 1 1 0; min-width: 0; padding: 10px 2px; font-size: 13px; }
+  .star-picker { display: flex; gap: 6px; }
+  .star-picker button { background: none; border: none; font-size: 40px; line-height: 1; padding: 2px; cursor: pointer; color: var(--card); -webkit-text-stroke: 2px var(--accent); }
   .star-picker button.on { color: var(--accent); }
+  .star-hint { font-size: 13px; color: var(--ink); margin-top: 4px; text-shadow: 0 0 3px rgba(242,230,204,.95), 0 0 9px rgba(242,230,204,.9); }
+  input::placeholder, textarea::placeholder { color: #6b6a62; opacity: 1; }
+  details.form-group { margin-bottom: 14px; }
+  details.form-group > summary {
+    list-style: none; cursor: pointer; display: flex; align-items: center; justify-content: space-between;
+    padding: 13px 16px; background: var(--card); border: 2px solid var(--sky-soft); border-radius: 10px;
+    font-family: 'Courier New', monospace; font-size: 14px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--sky);
+  }
+  details.form-group > summary::-webkit-details-marker { display: none; }
+  details.form-group > summary::after { content: '▾'; font-size: 18px; transition: transform .2s; }
+  details.form-group[open] > summary::after { transform: rotate(180deg); }
+  .form-group-body { padding-top: 16px; }
+  .submit-bar {
+    position: sticky; bottom: 0; z-index: 10; margin-top: 8px;
+    padding: 14px 0 calc(14px + env(safe-area-inset-bottom));
+    background: linear-gradient(to bottom, rgba(242,230,204,0), var(--paper) 35%);
+  }
 
   .btn-back {
     display: flex; align-items: center; justify-content: center;
@@ -881,6 +903,10 @@ function weatherEmoji(value) {
 function weatherLabel(value) {
   if (!value) return '';
   return value.split(',').filter(Boolean).map(k => (WEATHER.find(w => w.key === k) || WEATHER[0]).label).join(', ');
+}
+function heuteIso() {
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 }
 function fmtDate(iso) {
   if (!iso) return '';
@@ -1753,7 +1779,7 @@ function renderForm(editTour, vorlage) {
     stromKosten: editTour.strom_kosten || '',
   } : vorlage ? {
     // "Nochmal hinfahren": nur Platzdaten übernehmen, alles Besuchsbezogene bleibt leer
-    ort: vorlage.ort || '', typ: vorlage.typ || 'Stellplatz', datumVon: '', datumBis: '',
+    ort: vorlage.ort || '', typ: vorlage.typ || 'Stellplatz', datumVon: heuteIso(), datumBis: '',
     kosten: '', wetter: ['sonnig'], bewertung: null, notizen: '',
     strom: !!vorlage.strom, boden: (vorlage.boden || '').split(',').filter(Boolean),
     sanitaer: !!vorlage.sanitaer, bezahlung: (vorlage.bezahlung || '').split(',').filter(Boolean),
@@ -1761,7 +1787,7 @@ function renderForm(editTour, vorlage) {
     nachttemperatur: '', tagestemperatur: '', anreiseZeit: '', abreiseZeit: '', zeiten24h: !!vorlage.zeiten_24h,
     mobilfunk: vorlage.mobilfunk || '', wlan: vorlage.wlan || '', stromKosten: vorlage.strom ? (vorlage.strom_kosten || '') : '',
   } : {
-    ort: '', typ: 'Stellplatz', datumVon: '', datumBis: '',
+    ort: '', typ: 'Stellplatz', datumVon: heuteIso(), datumBis: '',
     kosten: '', wetter: ['sonnig'], bewertung: null, notizen: '',
     strom: false, boden: [], sanitaer: false, bezahlung: [], broetchenservice: false, umgebung: [],
     nachttemperatur: '', tagestemperatur: '', anreiseZeit: '', abreiseZeit: '', zeiten24h: false,
@@ -1770,6 +1796,7 @@ function renderForm(editTour, vorlage) {
   const [anreiseH, anreiseM] = (form.anreiseZeit || '').split(':');
   const [abreiseH, abreiseM] = (form.abreiseZeit || '').split(':');
   const wrap = el('<div></div>');
+  const detailsOffen = isEdit || !!vorlage;
   wrap.innerHTML = \`
     <div class="top-row"><div class="top-row-left"><button class="btn-back">\${ICON_BACK}</button><h1>\${isEdit ? 'Tour bearbeiten' : vorlage ? 'Nochmal hinfahren' : 'Neue Tour eintragen'}</h1></div></div>
     \${vorlage ? \`<div class="vorlage-hinweis">Platzdaten von deinem letzten Besuch sind übernommen – trag noch Datum, Wetter und Bewertung ein.</div>\` : ''}
@@ -1777,7 +1804,7 @@ function renderForm(editTour, vorlage) {
       <label class="field"><span class="field-label">Ort / Platzname</span><input name="ort" required list="bekannte-orte" autocomplete="off" placeholder="z. B. Campingplatz Seeblick" value="\${escapeHtml(form.ort)}" /></label>
       <datalist id="bekannte-orte">\${bekannteOrte().map(o => \`<option value="\${escapeHtml(o)}"></option>\`).join('')}</datalist>
       <div class="field" style="margin-bottom:16px;">
-        <span class="field-label">📷 Titelbild</span>
+        <span class="field-label">Titelbild</span>
         <div class="foto-feld" id="foto-feld">
           <img id="foto-vorschau" class="foto-vorschau \${isEdit && editTour.foto_stand ? '' : 'hidden'}" src="\${isEdit && editTour.foto_stand ? fotoUrl(editTour) : ''}" alt="" />
           <div class="foto-buttons">
@@ -1797,9 +1824,19 @@ function renderForm(editTour, vorlage) {
         </div>
       </label>
       <div class="row2">
-        <label class="field"><span class="field-label">Von</span><input type="date" name="datumVon" required value="\${form.datumVon}" /></label>
-        <label class="field"><span class="field-label">Bis</span><input type="date" name="datumBis" value="\${form.datumBis}" /></label>
+        <label class="field"><span class="field-label">Von (Anreise)</span><input type="date" name="datumVon" required value="\${form.datumVon}" /></label>
+        <label class="field"><span class="field-label">Bis (Abreise)</span><input type="date" name="datumBis" value="\${form.datumBis}" /></label>
       </div>
+      <label class="field"><span class="field-label">Kosten (€)</span><input type="number" step="0.01" min="0" name="kosten" placeholder="0,00" value="\${form.kosten}" /></label>
+      <label class="field"><span class="field-label">Bewertung des Platzes</span>
+        <div class="star-picker" id="star-picker">
+          \${[1,2,3,4,5].map(i => \`<button type="button" data-star="\${i}" class="\${i <= form.bewertung ? 'on' : ''}">★</button>\`).join('')}
+        </div>
+        <div class="star-hint">Antippen zum Bewerten, nochmal antippen zum Entfernen</div>
+      </label>
+      <details class="form-group" \${detailsOffen ? 'open' : ''}>
+        <summary>Zeiten</summary>
+        <div class="form-group-body">
       <div class="row2" id="zeiten-row" style="\${form.zeiten24h ? 'display:none;' : ''}">
         <label class="field"><span class="field-label">Anreisezeit</span>
           <div class="time-select-row">
@@ -1819,12 +1856,17 @@ function renderForm(editTour, vorlage) {
       <label class="field">
         <button type="button" class="choice-btn \${form.zeiten24h ? 'sel' : ''}" id="zeiten-24h-btn" style="width:100%;">🕐 Ein-/Ausfahrt rund um die Uhr (24 Stunden)</button>
       </label>
+        </div>
+      </details>
+      <details class="form-group" \${detailsOffen ? 'open' : ''}>
+        <summary>Platz &amp; Ausstattung</summary>
+        <div class="form-group-body">
       <label class="field"><span class="field-label">Boden (mehrfach möglich)</span>
         <div class="choice-row" id="boden-row">
           \${BODEN_TYPEN.map(b => \`<button type="button" class="choice-btn \${form.boden.includes(b) ? 'sel' : ''}" data-boden="\${b}">\${b}</button>\`).join('')}
         </div>
       </label>
-      <label class="field"><span class="field-label">Ausstattung</span>
+      <label class="field"><span class="field-label">Ausstattung (mehrfach möglich)</span>
         <div class="choice-row" id="ausstattung-row">
           <button type="button" class="choice-btn \${form.strom ? 'sel' : ''}" data-flag="strom">⚡ Strom</button>
           <button type="button" class="choice-btn \${form.sanitaer ? 'sel' : ''}" data-flag="sanitaer">🚿 Sanitär</button>
@@ -1839,22 +1881,26 @@ function renderForm(editTour, vorlage) {
           \${BEZAHLUNG_TYPEN.map(b => \`<button type="button" class="choice-btn \${form.bezahlung.includes(b) ? 'sel' : ''}" data-bezahlung="\${b}">\${b}</button>\`).join('')}
         </div>
       </label>
-      <label class="field"><span class="field-label">Umgebung</span>
+      <label class="field"><span class="field-label">Umgebung (mehrfach möglich)</span>
         <div class="choice-row" id="umgebung-row">
           \${UMGEBUNG_TYPEN.map(u => \`<button type="button" class="choice-btn \${form.umgebung.includes(u) ? 'sel' : ''}" data-umgebung="\${u}">\${u}</button>\`).join('')}
         </div>
       </label>
-      <label class="field"><span class="field-label">📶 Mobilfunk-Empfang</span>
+      <label class="field"><span class="field-label">Mobilfunk-Empfang</span>
         <div class="choice-row" id="mobilfunk-row">
-          \${SIGNAL_STUFEN.map(s => \`<button type="button" class="choice-btn signal-btn \${s === form.mobilfunk ? 'sel' : ''}" data-mobilfunk="\${s}">\${s}</button>\`).join('')}
+          \${SIGNAL_STUFEN.map(s => \`<button type="button" class="choice-btn signal-btn \${s === form.mobilfunk ? 'sel' : ''}" data-mobilfunk="\${s}">\${s === 'Kein Empfang' ? 'Kein' : s}</button>\`).join('')}
         </div>
       </label>
-      <label class="field"><span class="field-label">📡 WLAN-Stärke</span>
+      <label class="field"><span class="field-label">WLAN-Stärke</span>
         <div class="choice-row" id="wlan-row">
-          \${SIGNAL_STUFEN.map(s => \`<button type="button" class="choice-btn signal-btn \${s === form.wlan ? 'sel' : ''}" data-wlan="\${s}">\${s}</button>\`).join('')}
+          \${SIGNAL_STUFEN.map(s => \`<button type="button" class="choice-btn signal-btn \${s === form.wlan ? 'sel' : ''}" data-wlan="\${s}">\${s === 'Kein Empfang' ? 'Kein' : s}</button>\`).join('')}
         </div>
       </label>
-      <label class="field"><span class="field-label">Kosten (€)</span><input type="number" step="0.01" min="0" name="kosten" placeholder="0,00" value="\${form.kosten}" /></label>
+        </div>
+      </details>
+      <details class="form-group" \${detailsOffen ? 'open' : ''}>
+        <summary>Wetter &amp; Temperatur</summary>
+        <div class="form-group-body">
       <label class="field"><span class="field-label">Wetter (mehrfach möglich)</span>
         <div class="choice-row" id="wetter-row">
           \${WEATHER.map(w => \`<button type="button" class="choice-btn weather-btn \${form.wetter.includes(w.key) ? 'sel' : ''}" data-wetter="\${w.key}"><span style="font-size:20px">\${w.emoji}</span><span class="mono" style="font-size:12px;font-weight:700">\${w.label}</span></button>\`).join('')}
@@ -1864,14 +1910,13 @@ function renderForm(editTour, vorlage) {
         <label class="field"><span class="field-label">Tagestemperatur (°C)</span><input type="number" step="0.5" name="tagestemperatur" placeholder="z. B. 22" value="\${form.tagestemperatur}" /></label>
         <label class="field"><span class="field-label">Nachttemperatur (°C)</span><input type="number" step="0.5" name="nachttemperatur" placeholder="z. B. 12" value="\${form.nachttemperatur}" /></label>
       </div>
-      <label class="field"><span class="field-label">Bewertung des Platzes</span>
-        <div class="star-picker" id="star-picker">
-          \${[1,2,3,4,5].map(i => \`<button type="button" data-star="\${i}" class="\${i <= form.bewertung ? 'on' : ''}">★</button>\`).join('')}
         </div>
-      </label>
+      </details>
       <label class="field"><span class="field-label">Notizen</span><textarea name="notizen" placeholder="Besonderheiten, Tipps für nächstes Mal, Ausblick …">\${escapeHtml(form.notizen)}</textarea></label>
+      <div class="submit-bar">
       <div class="err hidden" id="form-err"></div>
       <button type="submit" class="btn-primary" id="submit-btn">\${isEdit ? 'Änderungen speichern' : 'Tour speichern'}</button>
+      </div>
     </form>
   \`;
   wrap.querySelector('.btn-back').onclick = () => {
