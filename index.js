@@ -468,27 +468,30 @@ const HTML = `<!DOCTYPE html>
     text-transform: uppercase; letter-spacing: .14em; color: var(--muted);
     margin-bottom: 10px;
   }
+  .eyebrow, .count { color: var(--ink); }
   .logo-badge {
     width: 40px; height: 40px; border-radius: 999px; object-fit: cover;
     border: 2px solid var(--sky); flex-shrink: 0;
   }
-  .hero { padding: 36px 0 24px; }
-  .hero-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+  .hero { padding: 22px 0 12px; }
+  .hero h1 { margin: 6px 0 0; }
+  .hero-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .hero-top .eyebrow { margin-bottom: 0; }
   .add-btn-top {
-    display: flex; align-items: center; gap: 7px; flex-shrink: 0;
+    position: fixed; right: 20px; bottom: calc(20px + env(safe-area-inset-bottom)); z-index: 50;
+    display: flex; align-items: center; gap: 8px;
     background: var(--sky); color: var(--card); border: none; border-radius: 999px;
-    padding: 11px 18px 11px 14px; font-family: inherit; font-size: 14px; font-weight: 700;
-    cursor: pointer; box-shadow: 3px 3px 0 var(--accent); margin-top: 6px;
+    padding: 14px 20px 14px 14px; font-family: inherit; font-size: 16px; font-weight: 700;
+    cursor: pointer; box-shadow: 3px 3px 0 var(--accent), 0 6px 16px rgba(0,0,0,.25);
   }
-  .add-btn-top:active { transform: translate(1px, 1px); box-shadow: 2px 2px 0 var(--accent); }
+  .add-btn-top:active { transform: translate(1px, 1px); box-shadow: 2px 2px 0 var(--accent), 0 4px 12px rgba(0,0,0,.25); }
   .add-btn-plus {
-    width: 20px; height: 20px; border-radius: 999px; background: rgba(255,255,255,.22);
-    display: flex; align-items: center; justify-content: center; font-size: 15px; line-height: 1;
+    width: 24px; height: 24px; border-radius: 999px; background: rgba(255,255,255,.22);
+    display: flex; align-items: center; justify-content: center; font-size: 18px; line-height: 1;
   }
-  @media (max-width: 420px) { .add-btn-top span:last-child { display: none; } .add-btn-top { padding: 11px; } }
   .yt-link {
     display: inline-flex; align-items: center; justify-content: center;
-    width: 40px; height: 40px; margin-top: 14px;
+    width: 44px; height: 44px; flex-shrink: 0;
     color: #b5482f; text-decoration: none;
     background: var(--card); border: 2px solid rgba(181,72,47,.4);
     border-radius: 999px; padding: 0;
@@ -500,8 +503,8 @@ const HTML = `<!DOCTYPE html>
     background: var(--card);
     border: 2px solid var(--sky);
     border-radius: 16px;
-    padding: 52px 20px 22px;
-    margin-bottom: 32px;
+    padding: 16px 20px 14px;
+    margin-bottom: 18px;
     box-shadow: 4px 4px 0 var(--sky);
   }
   .stamp {
@@ -519,17 +522,16 @@ const HTML = `<!DOCTYPE html>
   .stats { display: grid; grid-template-columns: repeat(3,1fr); }
   .stats > div { text-align: center; padding: 0 4px; border-left: 1px solid var(--sky-soft); }
   .stats > div:first-child { border-left: none; }
-  .stat-val { font-size: 28px; font-weight: 700; color: var(--accent); display: block; }
+  .stat-val { font-size: 24px; font-weight: 700; color: var(--accent); display: block; }
   .stat-label { font-family: 'Courier New', monospace; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
   .temp-row {
-    display: flex; justify-content: center; gap: 20px; margin-top: 16px; padding-top: 14px;
+    display: flex; justify-content: center; gap: 20px; margin-top: 10px; padding-top: 10px;
     border-top: 1px solid var(--sky-soft); font-family: 'Courier New', monospace;
     font-size: 14px; color: var(--ink); font-weight: 700;
   }
   @media (max-width: 380px) {
     .stat-val { font-size: 22px; }
     .stamp { width: 58px; height: 58px; font-size: 9px; right: 12px; }
-    .stampcard { padding-top: 46px; }
     .temp-row { gap: 12px; font-size: 13px; }
   }
 
@@ -556,12 +558,13 @@ const HTML = `<!DOCTYPE html>
   }
   .year-head:first-child { margin-top: 0; }
 
-  .filter-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+  .filter-row { display: flex; gap: 8px; align-items: center; margin-bottom: 16px; }
   .filter-select {
     background: var(--card); border: 2px solid var(--sky-soft); border-radius: 8px;
     padding: 9px 10px; font-size: 14px; font-weight: 700; color: var(--sky); font-family: 'Courier New', monospace;
-    flex: 1; min-width: 130px;
+    flex: 1 1 0; min-width: 0;
   }
+  .filter-toggle.fav-filter { flex: 0 0 44px; width: 44px; height: 44px; padding: 0; font-size: 20px; display: flex; align-items: center; justify-content: center; }
   .filter-toggle {
     background: var(--card); border: 2px solid var(--sky-soft); border-radius: 8px;
     padding: 9px 12px; font-size: 14px; font-weight: 700; color: var(--sky); font-family: 'Courier New', monospace;
@@ -591,6 +594,7 @@ const HTML = `<!DOCTYPE html>
   .card-bottom .card-meta { flex: 1 1 auto; min-width: 0; }
   .card-actions { display: flex; align-items: center; gap: 6px; margin-left: auto; flex-shrink: 0; margin-top: 4px; }
   .fav-star { font-size: 18px; cursor: pointer; flex-shrink: 0; background: none; border: none; padding: 4px; line-height: 1; }
+  .unrated { color: var(--muted); font-size: 16px; }
   .stars { color: var(--accent); font-size: 14px; letter-spacing: 1px; flex-shrink: 0; }
 
   /* FAB entfernt zugunsten des Hinzufügen-Buttons oben im Hero */
@@ -618,7 +622,7 @@ const HTML = `<!DOCTYPE html>
 
   .btn-back {
     display: flex; align-items: center; justify-content: center;
-    width: 40px; height: 40px; border-radius: 999px;
+    width: 44px; height: 44px; border-radius: 999px;
     background: var(--card); border: 2px solid var(--sky-soft); color: var(--sky);
     cursor: pointer; flex-shrink: 0; padding: 0;
   }
@@ -627,7 +631,7 @@ const HTML = `<!DOCTYPE html>
   .btn-back svg { width: 18px; height: 18px; }
   .icon-btn {
     display: flex; align-items: center; justify-content: center;
-    width: 40px; height: 40px; border-radius: 999px;
+    width: 44px; height: 44px; border-radius: 999px;
     background: var(--card); border: 2px solid var(--sky-soft); color: var(--sky);
     cursor: pointer; flex-shrink: 0; padding: 0;
   }
@@ -641,14 +645,28 @@ const HTML = `<!DOCTYPE html>
   .top-row h1 { font-size: 24px; margin: 0; }
 
   .btn-primary {
-    width: 100%; background: var(--accent); color: var(--card); font-weight: 700;
+    width: 100%; background: var(--sky); color: var(--card); font-weight: 700;
     padding: 15px; border: none; border-radius: 10px; font-size: 16px; cursor: pointer;
-    box-shadow: 3px 3px 0 var(--sky); font-family: inherit;
+    box-shadow: 3px 3px 0 var(--accent); font-family: inherit;
   }
   .btn-primary:disabled { opacity: .6; }
+  .btn-secondary { background: var(--card); color: var(--sky); border: 2px solid var(--sky); box-shadow: 3px 3px 0 var(--sky); }
   .btn-primary svg { width: 18px; height: 18px; flex-shrink: 0; }
   .err { color: var(--danger); font-size: 14px; margin-bottom: 14px; }
 
+  .detail-summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 14px; }
+  .ds-tile { background: var(--card); border: 2px solid var(--sky-soft); border-radius: 12px; padding: 10px 6px; text-align: center; display: flex; flex-direction: column; gap: 3px; justify-content: center; }
+  .ds-lab, .ds-sub { font-family: 'Courier New', monospace; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+  .ds-val { font-weight: 700; font-size: 15px; line-height: 1.25; color: var(--ink); }
+  .ds-stars { color: var(--accent); font-size: 16px; letter-spacing: 1px; }
+  .detail-group { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--sky-soft); }
+  .detail-group:first-child { margin-top: 0; padding-top: 0; border-top: none; }
+  .detail-group-title { font-family: 'Courier New', monospace; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .1em; color: var(--sky); margin-bottom: 10px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip { background: rgba(47,111,158,.1); border: 1px solid var(--sky-soft); border-radius: 999px; padding: 6px 12px; font-size: 14px; font-weight: 600; }
+  .detail-actions { margin-top: 24px; display: flex; flex-direction: column; gap: 12px; }
+  .detail-actions-row { display: flex; gap: 10px; }
+  .detail-actions-row .btn-primary { flex: 1; width: auto; padding: 13px 8px; font-size: 15px; }
   .detail-box { background: var(--card); border: 2px solid var(--sky-soft); border-radius: 14px; padding: 20px; }
   .detail-row { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
   .detail-row:last-child { margin-bottom: 0; }
@@ -1159,16 +1177,12 @@ function renderHome() {
   wrap.innerHTML = \`
     <div class="hero">
       <div class="hero-top">
-        <div>
-          <div class="eyebrow"><img src="/icon-192.jpg" class="logo-badge" alt="CamperLog Logo" /> Unser Tourenbuch</div>
-          <h1>Unterwegs<br/>mit Iva</h1>
-        </div>
-        <button class="add-btn-top" id="add-top-btn"><span class="add-btn-plus">+</span><span>Neue Tour</span></button>
+        <div class="eyebrow"><img src="/icon-192.jpg" class="logo-badge" alt="CamperLog Logo" /> Unser Tourenbuch</div>
+        <a href="https://www.youtube.com/@Iva_ontour" target="_blank" rel="noopener" class="yt-link" title="Iva on Tour auf YouTube" aria-label="Iva on Tour auf YouTube">\${ICON_YOUTUBE}</a>
       </div>
-      <a href="https://www.youtube.com/@Iva_ontour" target="_blank" rel="noopener" class="yt-link" title="Iva on Tour auf YouTube">\${ICON_YOUTUBE}</a>
+      <h1>Unterwegs mit Iva</h1>
     </div>
     <div class="stampcard">
-      <div class="stamp">\${stats.plaetze}<br/>Plätze</div>
       <div class="stats">
         <div><span class="stat-val">\${stats.plaetze}</span><span class="stat-label">Plätze</span></div>
         <div><span class="stat-val">\${stats.touren}</span><span class="stat-label">Touren</span></div>
@@ -1188,6 +1202,7 @@ function renderHome() {
       <button class="tab-btn \${state.homeTab === 'rueckblick' ? 'active' : ''}" data-tab="rueckblick">📊 Rückblick</button>
     </div>
     <div id="tab-content"></div>
+    <button class="add-btn-top" id="add-top-btn" aria-label="Neue Tour eintragen"><span class="add-btn-plus">+</span><span>Neue Tour</span></button>
   \`;
   wrap.querySelector('#todrive-home').appendChild(renderToDriveHome());
   wrap.querySelector('#add-top-btn').onclick = () => { state.editingId = null; state.vorlageId = null; state.view = 'form'; state.error = ''; render(); };
@@ -1243,7 +1258,7 @@ function renderTourCard(t) {
         <div class="card-bottom">
           <div class="card-meta"><span>\${fmtDate(t.datum_von)}</span><span>·</span><span>\${escapeHtml(t.typ)}</span>\${t.strom ? '<span>⚡</span>' : ''}\${t.sanitaer ? '<span>🚿</span>' : ''}\${t.broetchenservice ? '<span>🥐</span>' : ''}</div>
           <div class="card-actions">
-            <div class="stars">\${starsStr(t.bewertung || 0)}</div>
+            <div class="stars">\${t.bewertung ? starsStr(t.bewertung) : '<span class="unrated" title="Noch nicht bewertet">–</span>'}</div>
             <button class="fav-star">\${t.favorit ? '★' : '☆'}</button>
           </div>
         </div>
@@ -1261,19 +1276,19 @@ function renderTourenTab() {
     <div class="section-head"><h2>Bisherige Touren</h2><span class="count" id="touren-count"></span></div>
     <div class="filter-row">
       <select id="sort-select" class="filter-select">
-        <option value="datum_neu">Neueste zuerst</option>
-        <option value="datum_alt">Älteste zuerst</option>
-        <option value="bewertung">Beste Bewertung</option>
-        <option value="kosten_hoch">Teuerste zuerst</option>
-        <option value="kosten_niedrig">Günstigste zuerst</option>
+        <option value="datum_neu">Neueste</option>
+        <option value="datum_alt">Älteste</option>
+        <option value="bewertung">Bewertung</option>
+        <option value="kosten_hoch">Teuerste</option>
+        <option value="kosten_niedrig">Günstigste</option>
       </select>
       <select id="umgebung-select" class="filter-select">
-        <option value="">Alle Umgebungen</option>
+        <option value="">Umgebung</option>
         <option value="Natur">Natur</option>
         <option value="Stadt">Stadt</option>
         <option value="Therme">Therme</option>
       </select>
-      <button id="fav-filter-btn" class="filter-toggle \${state.tourenFilterFavorit ? 'active' : ''}">★ Nur Favoriten</button>
+      <button id="fav-filter-btn" class="filter-toggle fav-filter \${state.tourenFilterFavorit ? 'active' : ''}" title="Nur Favoriten" aria-label="Nur Favoriten anzeigen" aria-pressed="\${state.tourenFilterFavorit ? 'true' : 'false'}">★</button>
     </div>
     <div id="touren-list"></div>
   \`;
@@ -2105,9 +2120,36 @@ function renderDetail() {
   const t = state.touren.find(x => x.id === state.activeId);
   const wrap = el('<div></div>');
   if (!t) { wrap.innerHTML = '<p>Nicht gefunden.</p>'; return wrap; }
+  const hatBis = !!(t.datum_bis && t.datum_bis !== t.datum_von);
+  const naechteAnz = exportNaechte(t);
+  const kostenZahl = (t.kosten != null && t.kosten !== '') ? parseFloat(t.kosten) : null;
+  const kostenText = kostenZahl === null || isNaN(kostenZahl) ? '–' : (kostenZahl === 0 ? 'kostenlos' : fmtEuro(kostenZahl));
+  const zeitenText = t.zeiten_24h ? '🕐 Rund um die Uhr' : [t.anreise_zeit ? 'An ' + t.anreise_zeit + ' Uhr' : '', t.abreise_zeit ? 'Ab ' + t.abreise_zeit + ' Uhr' : ''].filter(Boolean).join(' · ');
+  const chipsHtml = [
+    t.strom ? '⚡ Strom' + (t.strom_kosten ? ' (' + t.strom_kosten + ')' : '') : '',
+    t.sanitaer ? '🚿 Sanitär' : '',
+    t.broetchenservice ? '🥐 Brötchenservice' : '',
+    t.mobilfunk ? '📶 Mobilfunk: ' + t.mobilfunk : '',
+    t.wlan ? '📡 WLAN: ' + t.wlan : '',
+  ].filter(Boolean).map(c => '<span class="chip">' + escapeHtml(c) + '</span>').join('');
+  const detailZeile = (name, wert) => '<div class="detail-row"><span class="detail-label">' + name + '</span><span>' + wert + '</span></div>';
+  const platzZeilen = [
+    t.boden ? detailZeile('Boden', escapeHtml(t.boden.split(',').filter(Boolean).join(', '))) : '',
+    t.umgebung ? detailZeile('Umgebung', escapeHtml(umgebungListe(t.umgebung).join(', '))) : '',
+    t.bezahlung ? detailZeile('Bezahlen', escapeHtml(t.bezahlung.split(',').filter(Boolean).join(', '))) : '',
+  ].join('');
+  const wetterZeilen = detailZeile('Wetter', weatherEmoji(t.wetter) + ' ' + escapeHtml(weatherLabel(t.wetter))) +
+    (t.tagestemperatur != null ? detailZeile('Tagestemp.', '☀️ ' + escapeHtml(String(t.tagestemperatur)) + '°C') : '') +
+    (t.nachttemperatur != null ? detailZeile('Nachttemp.', '🌙 ' + escapeHtml(String(t.nachttemperatur)) + '°C') : '');
+  const gruppe = (titel, inhalt) => inhalt ? '<div class="detail-group"><div class="detail-group-title">' + titel + '</div>' + inhalt + '</div>' : '';
+  const detailGruppen =
+    gruppe('Aufenthalt', zeitenText ? detailZeile('Zeiten', zeitenText) : '') +
+    gruppe('Platz', platzZeilen) +
+    gruppe('Ausstattung', chipsHtml ? '<div class="chips">' + chipsHtml + '</div>' : '') +
+    gruppe('Wetter &amp; Temperatur', wetterZeilen);
   wrap.innerHTML = \`
     <div class="top-row">
-      <button class="btn-back">\${ICON_BACK}</button>
+      <button class="btn-back" aria-label="Zurück">\${ICON_BACK}</button>
       <div class="icon-btn-row">
         <button class="icon-btn" id="edit-toggle" title="Bearbeiten">\${ICON_EDIT}</button>
         <button class="icon-btn danger" id="del-toggle" title="Löschen">\${ICON_TRASH}</button>
@@ -2120,27 +2162,20 @@ function renderDetail() {
       <h1 style="font-size:28px; margin:0;">\${escapeHtml(t.ort)}</h1>
     </div>
     <div class="mono" style="margin-left:32px; color: var(--muted); font-size:14px; font-weight:700; margin-bottom:22px;">\${escapeHtml(t.typ)} \${t.favorit ? ' · ★ Favorit' : ''}</div>
-    <div class="detail-box">
-      <div class="detail-row"><span class="detail-label">Datum</span><span>\${fmtDate(t.datum_von)}\${t.datum_bis && t.datum_bis !== t.datum_von ? ' – ' + fmtDate(t.datum_bis) : ''}</span></div>
-      \${t.zeiten_24h ? \`<div class="detail-row"><span class="detail-label">Zeiten</span><span>🕐 Rund um die Uhr</span></div>\` : (t.anreise_zeit || t.abreise_zeit) ? \`<div class="detail-row"><span class="detail-label">Zeiten</span><span>\${t.anreise_zeit ? 'An ' + t.anreise_zeit + ' Uhr' : ''}\${t.anreise_zeit && t.abreise_zeit ? ' · ' : ''}\${t.abreise_zeit ? 'Ab ' + t.abreise_zeit + ' Uhr' : ''}</span></div>\` : ''}
-      \${t.boden ? \`<div class="detail-row"><span class="detail-label">Boden</span><span>\${escapeHtml(t.boden.split(',').filter(Boolean).join(', '))}</span></div>\` : ''}
-      \${t.umgebung ? \`<div class="detail-row"><span class="detail-label">Umgebung</span><span>\${escapeHtml(umgebungListe(t.umgebung).join(', '))}</span></div>\` : ''}
-      \${t.mobilfunk ? \`<div class="detail-row"><span class="detail-label">Mobilfunk</span><span>📶 \${escapeHtml(t.mobilfunk)}</span></div>\` : ''}
-      \${t.wlan ? \`<div class="detail-row"><span class="detail-label">WLAN</span><span>📡 \${escapeHtml(t.wlan)}</span></div>\` : ''}
-      \${t.bezahlung ? \`<div class="detail-row"><span class="detail-label">Bezahlen</span><span>\${escapeHtml(t.bezahlung.split(',').filter(Boolean).join(', '))}</span></div>\` : ''}
-      \${(t.kosten != null && t.kosten !== '') ? \`<div class="detail-row"><span class="detail-label">Kosten</span><span>\${parseFloat(t.kosten) === 0 ? 'kostenlos' : parseFloat(t.kosten).toFixed(2) + ' €'}</span></div>\` : ''}
-      <div class="detail-row"><span class="detail-label">Wetter</span><span>\${weatherEmoji(t.wetter)} \${weatherLabel(t.wetter)}</span></div>
-      \${t.tagestemperatur != null ? \`<div class="detail-row"><span class="detail-label">Tagestemp.</span><span>☀️ \${t.tagestemperatur}°C</span></div>\` : ''}
-      \${t.nachttemperatur != null ? \`<div class="detail-row"><span class="detail-label">Nachttemp.</span><span>🌙 \${t.nachttemperatur}°C</span></div>\` : ''}
-      <div class="detail-row"><span class="detail-label">Bewertung</span><span style="color:var(--accent)">\${starsStr(t.bewertung || 0)}</span></div>
-      \${(t.strom || t.sanitaer || t.broetchenservice) ? \`<div class="detail-row"><span class="detail-label">Ausstattung</span><span>\${[t.strom ? '⚡ Strom' + (t.strom_kosten ? ' (' + t.strom_kosten + ')' : '') : '', t.sanitaer ? '🚿 Sanitär' : '', t.broetchenservice ? '🥐 Brötchen' : ''].filter(Boolean).join(' · ')}</span></div>\` : ''}
+    <div class="detail-summary">
+      <div class="ds-tile"><span class="ds-lab">Datum</span><span class="ds-val">\${fmtDate(t.datum_von)}\${hatBis ? '<br/>– ' + fmtDate(t.datum_bis) : ''}</span><span class="ds-sub">\${naechteAnz} \${naechteAnz === 1 ? 'Nacht' : 'Nächte'}</span></div>
+      <div class="ds-tile"><span class="ds-lab">Kosten</span><span class="ds-val">\${kostenText}</span></div>
+      <div class="ds-tile"><span class="ds-lab">Bewertung</span><span class="ds-val ds-stars">\${t.bewertung ? starsStr(t.bewertung) : '–'}</span>\${t.bewertung ? '' : '<span class="ds-sub">nicht bewertet</span>'}</div>
     </div>
+    <div class="detail-box">\${detailGruppen}</div>
     \${t.notizen ? \`<div style="margin-top:20px;"><div class="field-label">Notizen</div><p style="white-space:pre-wrap; line-height:1.6;">\${escapeHtml(t.notizen)}</p></div>\` : ''}
-    <div style="display:flex; gap:10px; margin-top:24px; flex-wrap:wrap;">
-      <button class="btn-primary" id="fav-toggle-btn" style="flex:1; min-width:180px; background: var(--sky); box-shadow: 3px 3px 0 var(--accent);">\${t.favorit ? '★ Aus Favoriten entfernen' : '☆ Zu Favoriten hinzufügen'}</button>
-      <button class="btn-primary" id="maps-btn" style="flex:1; min-width:180px; background: var(--accent); box-shadow: 3px 3px 0 var(--sky); display:flex; align-items:center; justify-content:center; gap:8px;">\${ICON_PIN} Auf Google Maps öffnen</button>
+    <div class="detail-actions">
+      <button class="btn-primary" id="maps-btn" style="display:flex; align-items:center; justify-content:center; gap:8px;">\${ICON_PIN} Auf Google Maps öffnen</button>
+      <div class="detail-actions-row">
+        <button class="btn-primary btn-secondary" id="fav-toggle-btn" aria-pressed="\${t.favorit ? 'true' : 'false'}">\${t.favorit ? '★ Favorit' : '☆ Favorit'}</button>
+        <button class="btn-primary btn-secondary" id="nochmal-btn">🔁 Nochmal hin</button>
+      </div>
     </div>
-    <button class="btn-primary" id="nochmal-btn" style="margin-top:12px; background: var(--card); color: var(--sky); border: 2px solid var(--sky); box-shadow: 3px 3px 0 var(--sky);">🔁 Nochmal hinfahren</button>
   \`;
   wrap.querySelector('.btn-back').onclick = () => { state.view = 'home'; render(); };
   wrap.querySelector('#edit-toggle').onclick = () => { state.editingId = t.id; state.vorlageId = null; state.view = 'form'; render(); };
