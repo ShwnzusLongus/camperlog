@@ -621,9 +621,20 @@ const HTML = `<!DOCTYPE html>
   #boden-row { gap: 6px; }
   #ausstattung-row .choice-btn { min-width: 0; padding: 10px 4px; white-space: nowrap; }
   .signal-btn { flex: 1 1 0; min-width: 0; padding: 10px 2px; font-size: 13px; }
-  .star-picker { display: flex; gap: 6px; }
-  .star-picker button { background: none; border: none; font-size: 40px; line-height: 1; padding: 2px; cursor: pointer; color: var(--card); -webkit-text-stroke: 2px var(--accent); }
-  .star-picker button.on { color: var(--accent); }
+  .score-pill { position: relative; display: flex; gap: 6px; padding: 6px; margin-top: 34px; background: var(--card); border: 2px solid var(--sky-soft); border-radius: 16px; --sp-bg: var(--accent); --sp-fg: var(--ink); }
+  .sp-btn { position: relative; z-index: 2; flex: 1 1 0; min-width: 0; height: 48px; border: none; background: transparent; border-radius: 12px; font-family: 'Courier New', monospace; font-size: 18px; font-weight: 700; color: var(--ink); cursor: pointer; -webkit-tap-highlight-color: transparent; transition: color .2s, transform .12s; }
+  .sp-btn:active { transform: scale(.92); }
+  .sp-btn.sel { color: var(--sp-fg); }
+  .sp-thumb { position: absolute; z-index: 1; left: 0; top: 0; border-radius: 12px; background: var(--sp-bg); box-shadow: 0 0 14px var(--sp-bg), 0 2px 6px rgba(0,0,0,.2); pointer-events: none; }
+  .sp-bubble { position: absolute; z-index: 3; top: -32px; left: 0; transform: translateX(-50%); background: var(--sp-bg); color: var(--sp-fg); font-size: 13px; font-weight: 700; padding: 4px 10px; border-radius: 10px; white-space: nowrap; pointer-events: none; }
+  .sp-bubble::after { content: ''; position: absolute; left: 50%; bottom: -4px; width: 10px; height: 10px; background: var(--sp-bg); transform: translateX(-50%) rotate(45deg); border-radius: 2px; z-index: -1; }
+  .sp-leer .sp-thumb, .sp-leer .sp-bubble { opacity: 0; }
+  .sp-ready:not(.sp-snap) .sp-thumb { transition: transform .5s cubic-bezier(.34,1.56,.64,1), width .5s cubic-bezier(.34,1.56,.64,1), height .5s cubic-bezier(.34,1.56,.64,1), background-color .25s, box-shadow .25s, opacity .2s; }
+  .sp-ready:not(.sp-snap) .sp-bubble { transition: left .5s cubic-bezier(.34,1.56,.64,1), background-color .25s, color .25s, opacity .2s; }
+  .sp-thumb.pulse { animation: spPulse .5s ease-out; }
+  @keyframes spPulse { from { box-shadow: 0 0 0 0 var(--sp-bg), 0 0 14px var(--sp-bg); } to { box-shadow: 0 0 0 14px rgba(0,0,0,0), 0 0 14px var(--sp-bg); } }
+  .sp-ends { display: flex; justify-content: space-between; margin-top: 6px; font-family: 'Courier New', monospace; font-size: 12px; font-weight: 700; color: var(--ink); text-shadow: 0 0 3px rgba(242,230,204,.95), 0 0 9px rgba(242,230,204,.9); }
+  .mood-pill { display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 14px; font-weight: 700; line-height: 1.2; }
   .star-hint { font-size: 13px; color: var(--ink); margin-top: 4px; text-shadow: 0 0 3px rgba(242,230,204,.95), 0 0 9px rgba(242,230,204,.9); }
   input::placeholder, textarea::placeholder { color: #6b6a62; opacity: 1; }
   details.form-group { margin-bottom: 14px; }
@@ -865,6 +876,19 @@ function umgebungListe(wert) {
   return liste;
 }
 const SIGNAL_STUFEN = ['Kein Empfang', 'Schwach', 'Mittel', 'Gut', 'Stark'];
+// Bewertung 1-5: Name und Farbe der Stimmung (Textfarbe so gewählt, dass sie auf dem Hintergrund lesbar bleibt)
+const BEWERTUNG_STUFEN = {
+  1: { label: 'Schlecht', bg: '#b5482f', fg: '#ffffff' },
+  2: { label: 'Geht so', bg: '#dc9f4e', fg: '#2b3944' },
+  3: { label: 'Okay', bg: '#f0c94d', fg: '#2b3944' },
+  4: { label: 'Gut', bg: '#8cc084', fg: '#2b3944' },
+  5: { label: 'Top!', bg: '#1f7a5a', fg: '#ffffff' },
+};
+function moodPill(n) {
+  const m = BEWERTUNG_STUFEN[n];
+  if (!m) return starsStr(n || 0);
+  return '<span class="mood-pill" style="background:' + m.bg + ';color:' + m.fg + '">' + n + ' · ' + m.label + '</span>';
+}
 const STROM_KOSTEN_TYPEN = ['Inbegriffen', 'Kostenpflichtig'];
 
 const ICON_BACK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>';
@@ -1829,9 +1853,12 @@ function renderForm(editTour, vorlage) {
       </div>
       <label class="field"><span class="field-label">Kosten (€)</span><input type="number" step="0.01" min="0" name="kosten" placeholder="0,00" value="\${form.kosten}" /></label>
       <label class="field"><span class="field-label">Bewertung des Platzes</span>
-        <div class="star-picker" id="star-picker">
-          \${[1,2,3,4,5].map(i => \`<button type="button" data-star="\${i}" class="\${i <= form.bewertung ? 'on' : ''}">★</button>\`).join('')}
+        <div class="score-pill \${form.bewertung ? '' : 'sp-leer'}" id="star-picker" role="radiogroup" aria-label="Bewertung des Platzes von 1 bis 5">
+          <div class="sp-thumb"></div>
+          <div class="sp-bubble"></div>
+          \${[1,2,3,4,5].map(i => \`<button type="button" class="sp-btn" role="radio" aria-checked="false" data-star="\${i}">\${i}</button>\`).join('')}
         </div>
+        <div class="sp-ends"><span>Schlecht</span><span>Top</span></div>
         <div class="star-hint">Antippen zum Bewerten, nochmal antippen zum Entfernen</div>
       </label>
       <details class="form-group" \${detailsOffen ? 'open' : ''}>
@@ -2068,14 +2095,52 @@ function renderForm(editTour, vorlage) {
       btn.classList.toggle('sel', form.wetter.includes(val));
     };
   });
-  wrap.querySelectorAll('#star-picker button').forEach(btn => {
+  // Bewertung: Zahlen-Pillen, die Markierung gleitet federnd zur gewählten Zahl, Farbe und Label zeigen die Stimmung
+  const scorePill = wrap.querySelector('#star-picker');
+  const spThumb = scorePill.querySelector('.sp-thumb');
+  const spBubble = scorePill.querySelector('.sp-bubble');
+  const spBtns = Array.prototype.slice.call(scorePill.querySelectorAll('.sp-btn'));
+  function zeigeScore(animiert) {
+    const stufe = BEWERTUNG_STUFEN[form.bewertung];
+    const warLeer = scorePill.classList.contains('sp-leer') || !scorePill.classList.contains('sp-ready');
+    spBtns.forEach(b => {
+      const aktiv = parseInt(b.dataset.star) === form.bewertung;
+      b.classList.toggle('sel', aktiv);
+      b.setAttribute('aria-checked', aktiv ? 'true' : 'false');
+    });
+    scorePill.classList.toggle('sp-leer', !stufe);
+    const btn = spBtns.filter(b => parseInt(b.dataset.star) === form.bewertung)[0];
+    if (!stufe || !btn || !btn.offsetWidth) return;
+    // Aus dem leeren Zustand oder beim ersten Mal direkt hinsetzen (ohne Gleiten)
+    if (warLeer) scorePill.classList.add('sp-snap');
+    scorePill.style.setProperty('--sp-bg', stufe.bg);
+    scorePill.style.setProperty('--sp-fg', stufe.fg);
+    spThumb.style.width = btn.offsetWidth + 'px';
+    spThumb.style.height = btn.offsetHeight + 'px';
+    spThumb.style.transform = 'translate(' + btn.offsetLeft + 'px,' + btn.offsetTop + 'px)';
+    spBubble.textContent = stufe.label;
+    spBubble.style.left = (btn.offsetLeft + btn.offsetWidth / 2) + 'px';
+    if (warLeer) {
+      void spThumb.offsetWidth;
+      scorePill.classList.remove('sp-snap');
+      scorePill.classList.add('sp-ready');
+    }
+    if (animiert) {
+      spThumb.classList.remove('pulse');
+      void spThumb.offsetWidth;
+      spThumb.classList.add('pulse');
+    }
+  }
+  spBtns.forEach(btn => {
     btn.onclick = () => {
-      // Nochmal auf den gewählten Stern tippen = Bewertung wieder entfernen
-      const stern = parseInt(btn.dataset.star);
-      form.bewertung = form.bewertung === stern ? null : stern;
-      wrap.querySelectorAll('#star-picker button').forEach(b => b.classList.toggle('on', parseInt(b.dataset.star) <= form.bewertung));
+      const stufe = parseInt(btn.dataset.star);
+      form.bewertung = form.bewertung === stufe ? null : stufe; // nochmal antippen = Bewertung entfernen
+      zeigeScore(true);
+      try { if (navigator.vibrate) navigator.vibrate(12); } catch (e) {}
     };
   });
+  if (window.ResizeObserver) new ResizeObserver(() => zeigeScore(false)).observe(scorePill);
+  else requestAnimationFrame(() => zeigeScore(false));
 
   wrap.querySelector('#tour-form').onsubmit = async (e) => {
     e.preventDefault();
@@ -2210,7 +2275,7 @@ function renderDetail() {
     <div class="detail-summary">
       <div class="ds-tile"><span class="ds-lab">Datum</span><span class="ds-val">\${fmtDate(t.datum_von)}\${hatBis ? '<br/>– ' + fmtDate(t.datum_bis) : ''}</span><span class="ds-sub">\${naechteAnz} \${naechteAnz === 1 ? 'Nacht' : 'Nächte'}</span></div>
       <div class="ds-tile"><span class="ds-lab">Kosten</span><span class="ds-val">\${kostenText}</span></div>
-      <div class="ds-tile"><span class="ds-lab">Bewertung</span><span class="ds-val ds-stars">\${t.bewertung ? starsStr(t.bewertung) : '–'}</span>\${t.bewertung ? '' : '<span class="ds-sub">nicht bewertet</span>'}</div>
+      <div class="ds-tile"><span class="ds-lab">Bewertung</span><span class="ds-val">\${t.bewertung ? moodPill(t.bewertung) : '–'}</span>\${t.bewertung ? '' : '<span class="ds-sub">nicht bewertet</span>'}</div>
     </div>
     <div class="detail-box">\${detailGruppen}</div>
     \${t.notizen ? \`<div style="margin-top:20px;"><div class="field-label">Notizen</div><p style="white-space:pre-wrap; line-height:1.6;">\${escapeHtml(t.notizen)}</p></div>\` : ''}
